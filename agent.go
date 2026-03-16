@@ -3,18 +3,23 @@ package chainforge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/lioarce01/chainforge/pkg/core"
+	mcppkg "github.com/lioarce01/chainforge/pkg/mcp"
 )
 
 // Agent runs the agentic loop: call LLM → dispatch tools → repeat.
 type Agent struct {
-	cfg     agentConfig
-	toolMap map[string]core.Tool
+	cfg        agentConfig
+	toolMap    map[string]core.Tool
+	mcpClients []*mcppkg.Client
+	mcpOnce    sync.Once
+	mcpErr     error
 }
 
 func newAgent(cfg agentConfig) *Agent {
@@ -22,13 +27,76 @@ func newAgent(cfg agentConfig) *Agent {
 	for _, t := range cfg.tools {
 		tm[t.Definition().Name] = t
 	}
-	return &Agent{cfg: cfg, toolMap: tm}
+	clients := make([]*mcppkg.Client, len(cfg.mcpServers))
+	for i, s := range cfg.mcpServers {
+		clients[i] = mcppkg.NewClient(s, cfg.logger)
+	}
+	return &Agent{cfg: cfg, toolMap: tm, mcpClients: clients}
+}
+
+// connectMCP connects all configured MCP servers in parallel and merges their
+// tools into the agent's toolMap. Called exactly once via sync.Once.
+func (a *Agent) connectMCP(ctx context.Context) error {
+	if len(a.mcpClients) == 0 {
+		return nil
+	}
+
+	type result struct {
+		tools []core.Tool
+		err   error
+	}
+
+	ch := make(chan result, len(a.mcpClients))
+	for _, cl := range a.mcpClients {
+		go func(c *mcppkg.Client) {
+			if err := c.Connect(ctx); err != nil {
+				ch <- result{err: err}
+				return
+			}
+			ch <- result{tools: c.CoreTools()}
+		}(cl)
+	}
+
+	var errs []error
+	for range a.mcpClients {
+		r := <-ch
+		if r.err != nil {
+			errs = append(errs, r.err)
+			continue
+		}
+		for _, t := range r.tools {
+			name := t.Definition().Name
+			if _, exists := a.toolMap[name]; exists {
+				a.cfg.logger.Warn("mcp: tool name collision, MCP tool wins",
+					slog.String("name", name))
+			}
+			a.toolMap[name] = t
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// Close shuts down all MCP server connections. Call via defer after NewAgent.
+func (a *Agent) Close() error {
+	errs := make([]error, 0, len(a.mcpClients))
+	for _, cl := range a.mcpClients {
+		if err := cl.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // Run executes the agent loop synchronously and returns the final text response.
 // sessionID namespaces memory; use different IDs for independent conversations.
 func (a *Agent) Run(ctx context.Context, sessionID, userMessage string) (string, error) {
 	start := time.Now()
+
+	// Connect MCP servers exactly once across all Run calls.
+	a.mcpOnce.Do(func() { a.mcpErr = a.connectMCP(ctx) })
+	if a.mcpErr != nil {
+		return "", fmt.Errorf("agent: MCP connect: %w", a.mcpErr)
+	}
 
 	// Load history from memory
 	history, err := a.loadHistory(ctx, sessionID)
@@ -137,6 +205,16 @@ func (a *Agent) RunStream(ctx context.Context, sessionID, userMessage string) <-
 	ch := make(chan core.StreamEvent, 16)
 	go func() {
 		defer close(ch)
+
+		// Connect MCP servers exactly once across all RunStream calls.
+		a.mcpOnce.Do(func() { a.mcpErr = a.connectMCP(ctx) })
+		if a.mcpErr != nil {
+			ch <- core.StreamEvent{
+				Type:  core.StreamEventError,
+				Error: fmt.Errorf("agent: MCP connect: %w", a.mcpErr),
+			}
+			return
+		}
 
 		history, err := a.loadHistory(ctx, sessionID)
 		if err != nil {
@@ -335,14 +413,14 @@ func (a *Agent) prependSystem(history []core.Message) []core.Message {
 	return append([]core.Message{sys}, history...)
 }
 
-// buildToolDefs extracts ToolDefinition from all registered tools.
+// buildToolDefs extracts ToolDefinition from all registered tools (static + MCP).
 func (a *Agent) buildToolDefs() []core.ToolDefinition {
-	if len(a.cfg.tools) == 0 {
+	if len(a.toolMap) == 0 {
 		return nil
 	}
-	defs := make([]core.ToolDefinition, len(a.cfg.tools))
-	for i, t := range a.cfg.tools {
-		defs[i] = t.Definition()
+	defs := make([]core.ToolDefinition, 0, len(a.toolMap))
+	for _, t := range a.toolMap {
+		defs = append(defs, t.Definition())
 	}
 	return defs
 }

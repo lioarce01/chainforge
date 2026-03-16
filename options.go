@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/lioarce01/chainforge/pkg/core"
+	mcppkg "github.com/lioarce01/chainforge/pkg/mcp"
 )
 
 // agentConfig holds all configuration for an Agent.
@@ -19,6 +20,7 @@ type agentConfig struct {
 	maxTokens     int
 	temperature   float64
 	logger        *slog.Logger
+	mcpServers    []mcppkg.ServerConfig
 }
 
 func defaultConfig() agentConfig {
@@ -82,4 +84,18 @@ func WithTemperature(t float64) AgentOption {
 // WithLogger sets a structured logger (default: slog.Default()).
 func WithLogger(l *slog.Logger) AgentOption {
 	return func(c *agentConfig) { c.logger = l }
+}
+
+// WithMCPServer registers a single MCP server whose tools become available in the agent.
+// Connection is deferred until the first Run call.
+//
+//	chainforge.WithMCPServer(mcp.Stdio("npx", "-y", "@modelcontextprotocol/server-filesystem", "/tmp").WithName("fs"))
+//	chainforge.WithMCPServer(mcp.HTTP("https://api.example.com/mcp").WithName("myserver"))
+func WithMCPServer(s mcppkg.ServerConfig) AgentOption {
+	return func(c *agentConfig) { c.mcpServers = append(c.mcpServers, s) }
+}
+
+// WithMCPServers registers multiple MCP servers at once.
+func WithMCPServers(servers ...mcppkg.ServerConfig) AgentOption {
+	return func(c *agentConfig) { c.mcpServers = append(c.mcpServers, servers...) }
 }

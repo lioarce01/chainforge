@@ -16,6 +16,7 @@ result, err := agent.Run(ctx, "session-1", "What is 2^10 + 144?")
 ## Features
 
 - **Provider-agnostic** — swap Anthropic, OpenAI, or Ollama with one line; `pkg/core` has zero external dependencies
+- **MCP client** — connect any MCP server (Streamable HTTP or Stdio) with a single line; tools become indistinguishable from built-in tools
 - **Concurrent tool dispatch** — multiple tool calls from one LLM response run in parallel goroutines
 - **Multi-agent orchestration** — sequential pipelines and parallel fan-out
 - **Streaming** — `RunStream()` returns a channel of events
@@ -40,13 +41,8 @@ go get github.com/lioarce01/chainforge
 Swap providers with zero other changes:
 
 ```go
-// Anthropic
 chainforge.WithProvider(anthropic.New(os.Getenv("ANTHROPIC_API_KEY")))
-
-// OpenAI
 chainforge.WithProvider(openai.New(os.Getenv("OPENAI_API_KEY")))
-
-// Ollama (local)
 chainforge.WithProvider(ollama.New("http://localhost:11434"))
 ```
 
@@ -55,9 +51,6 @@ chainforge.WithProvider(ollama.New("http://localhost:11434"))
 ### Built-in
 
 ```go
-import "github.com/lioarce01/chainforge/pkg/tools/calculator"
-import "github.com/lioarce01/chainforge/pkg/tools/websearch"
-
 chainforge.WithTools(calculator.New())
 chainforge.WithTools(websearch.New(backend))
 ```
@@ -71,11 +64,32 @@ schema := tools.NewSchema().
 
 myTool, _ := tools.Func("search", "Search for information", schema,
     func(ctx context.Context, input string) (string, error) {
-        // your logic
         return result, nil
     },
 )
 ```
+
+### MCP servers
+
+Connect any MCP-compatible server. Tools are automatically discovered and namespaced as `servername__toolname`.
+
+```go
+// Remote server — Streamable HTTP (used by Cursor, Claude Code, hosted MCP services)
+chainforge.WithMCPServer(mcp.HTTP("https://docs.langchain.com/mcp").WithName("langchain"))
+
+// Local subprocess — Stdio (requires Node.js)
+chainforge.WithMCPServer(mcp.Stdio("npx", "-y", "@modelcontextprotocol/server-filesystem", "/tmp").WithName("fs"))
+
+// Multiple servers at once
+chainforge.WithMCPServers(
+    mcp.HTTP("https://api.example.com/mcp").WithName("myapi"),
+    mcp.Stdio("npx", "-y", "@modelcontextprotocol/server-filesystem", "/tmp").WithName("fs"),
+)
+
+defer agent.Close() // terminates subprocesses / closes connections
+```
+
+MCP servers are connected in parallel on the first `Run` call. Connection errors are cached — subsequent calls return the same error without retry.
 
 ## Multi-agent Orchestration
 
@@ -93,9 +107,9 @@ result, err := orchestrator.Sequential(ctx, "session",
 
 ```go
 results, err := orchestrator.Parallel(ctx, "session",
-    orchestrator.FanOf("pros",    proAgent,    "Analyze pros of Go"),
-    orchestrator.FanOf("cons",    conAgent,    "Analyze cons of Go"),
-    orchestrator.FanOf("summary", summaryAgent, "Summarize Go"),
+    orchestrator.FanOf("pros",     proAgent,     "Analyze pros of Go"),
+    orchestrator.FanOf("cons",     conAgent,     "Analyze cons of Go"),
+    orchestrator.FanOf("summary",  summaryAgent, "Summarize Go"),
 )
 ```
 
@@ -118,8 +132,9 @@ pkg/core/          # Provider, Tool, MemoryStore interfaces — zero external de
 pkg/providers/     # Anthropic, OpenAI, Ollama adapters
 pkg/tools/         # Calculator, WebSearch, FuncTool, Schema builder
 pkg/memory/        # InMemoryStore
+pkg/mcp/           # MCP client — Streamable HTTP and Stdio transports
 pkg/orchestrator/  # Sequential and Parallel runners
-examples/          # single-agent, multi-agent
+examples/          # single-agent, multi-agent, mcp-agent
 tests/             # Unit tests (mock provider, 14 scenarios)
 ```
 
@@ -133,8 +148,3 @@ go test ./...
 ANTHROPIC_API_KEY=sk-... go test -tags=integration ./tests/integration/...
 OPENAI_API_KEY=sk-...    go test -tags=integration ./tests/integration/...
 ```
-
-## Roadmap
-
-- **Phase 2** — MCP tool client, Qdrant/Weaviate vector memory, Qwen/Kimi providers
-- **Phase 3** — Prometheus/OpenTelemetry metrics, K8s deployment, Rust hot-path evaluation
