@@ -1,0 +1,55 @@
+// Package chainforge is a provider-agnostic Go agent orchestration library.
+// Developers import this package and call NewAgent() to build AI applications
+// without touching any LLM SDK directly.
+//
+// Quick start:
+//
+//	agent := chainforge.NewAgent(
+//	    chainforge.WithProvider(myProvider),
+//	    chainforge.WithModel("claude-sonnet-4-6"),
+//	    chainforge.WithSystemPrompt("You are a helpful assistant."),
+//	)
+//	result, err := agent.Run(ctx, "session-1", "Hello!")
+package chainforge
+
+import (
+	"fmt"
+
+	"github.com/lioarce01/chainforge/pkg/core"
+)
+
+// NewAgent constructs a new Agent with the provided options.
+// Returns an error if required configuration (Provider, Model) is missing.
+func NewAgent(opts ...AgentOption) (*Agent, error) {
+	cfg := defaultConfig()
+	for _, o := range opts {
+		o(&cfg)
+	}
+	if err := validateConfig(cfg); err != nil {
+		return nil, err
+	}
+	return newAgent(cfg), nil
+}
+
+// MustNewAgent is like NewAgent but panics on configuration errors.
+// Useful in main() or test setup where misconfiguration is a programmer error.
+func MustNewAgent(opts ...AgentOption) *Agent {
+	a, err := NewAgent(opts...)
+	if err != nil {
+		panic(fmt.Sprintf("chainforge: %v", err))
+	}
+	return a
+}
+
+func validateConfig(cfg agentConfig) error {
+	if cfg.provider == nil {
+		return core.ErrNoProvider
+	}
+	if cfg.model == "" {
+		return core.ErrNoModel
+	}
+	if cfg.maxIterations <= 0 {
+		return fmt.Errorf("chainforge: maxIterations must be > 0")
+	}
+	return nil
+}

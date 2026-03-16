@@ -1,0 +1,45 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go build output
+/bin/
+/dist/
+*.test
+*.out
+
+# Go module cache
+/vendor/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Test coverage
+coverage.out
+coverage.html
+
+# Claude Code
+CLAUDE.md
+deep-research-report.md
+
+# Scratch / temp files
+tranquil-splashing-cat.md
+image.png
+*.png
+*.jpg
+*.jpeg
+
+# Task tracking (local only)
+tasks/
