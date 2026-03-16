@@ -1,0 +1,88 @@
+---
+title: Quickstart
+description: Build your first chainforge agent in under 5 minutes.
+---
+
+## Install
+
+```bash
+go get github.com/lioarce01/chainforge
+```
+
+## 1. Create an agent
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "os"
+
+    chainforge "github.com/lioarce01/chainforge"
+    "github.com/lioarce01/chainforge/pkg/providers/openai"
+    "github.com/lioarce01/chainforge/pkg/tools/calculator"
+    "github.com/lioarce01/chainforge/pkg/memory/inmemory"
+)
+
+func main() {
+    agent, err := chainforge.NewAgent(
+        chainforge.WithProvider(openai.New(os.Getenv("OPENAI_API_KEY"))),
+        chainforge.WithModel("gpt-4o-mini"),
+        chainforge.WithSystemPrompt("You are a helpful assistant."),
+        chainforge.WithTools(calculator.New()),
+        chainforge.WithMemory(inmemory.New()),
+    )
+    if err != nil {
+        panic(err)
+    }
+
+    ctx := context.Background()
+    result, err := agent.Run(ctx, "session-1", "What is 2^10 + 144?")
+    if err != nil {
+        panic(err)
+    }
+
+    fmt.Println(result)
+}
+```
+
+## 2. Run it
+
+```bash
+OPENAI_API_KEY=sk-... go run main.go
+```
+
+## 3. Use any OpenAI-compatible provider
+
+chainforge works with OpenRouter, Ollama, or any provider that speaks the OpenAI API:
+
+```bash
+# OpenRouter
+API_KEY=sk-or-... BASE_URL=https://openrouter.ai/api/v1 MODEL=openai/gpt-4o-mini go run main.go
+```
+
+```go
+provider := openai.NewWithBaseURL(
+    os.Getenv("API_KEY"),
+    os.Getenv("BASE_URL"),
+    "openrouter",
+)
+```
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Providers" icon="server" href="/guides/providers">
+    Anthropic, OpenAI, Ollama, and OpenAI-compatible APIs.
+  </Card>
+  <Card title="Tools" icon="wrench" href="/guides/tools">
+    Built-in tools, custom tools, and MCP servers.
+  </Card>
+  <Card title="MCP" icon="plug" href="/guides/mcp">
+    Connect any MCP server with one line.
+  </Card>
+  <Card title="Orchestration" icon="diagram-project" href="/guides/orchestration">
+    Sequential pipelines and parallel fan-out.
+  </Card>
+</CardGroup>

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 32" fill="none">
+  <rect width="32" height="32" rx="8" fill="#6366F1"/>
+  <path d="M8 10h10l-4 6h6l-10 6 3-7H8l0-5z" fill="white"/>
+  <text x="42" y="22" font-family="system-ui, sans-serif" font-size="16" font-weight="600" fill="#F9FAFB">chainforge</text>
+</svg>

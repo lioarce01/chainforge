@@ -1,0 +1,65 @@
+---
+title: Orchestration
+description: Sequential pipelines and parallel fan-out across multiple agents.
+---
+
+The orchestrator lets you compose multiple agents into pipelines. Each agent is independent and can have its own provider, tools, and memory.
+
+## Sequential pipeline
+
+Steps run one after another. Each step receives the previous step's output via `{{.previous}}`.
+
+```go
+import "github.com/lioarce01/chainforge/pkg/orchestrator"
+
+result, err := orchestrator.Sequential(ctx, "session",
+    "Golang concurrency patterns",
+    orchestrator.StepOf("research", researchAgent, "Research this topic: {{.input}}"),
+    orchestrator.StepOf("write",    writerAgent,   "Write a blog post based on: {{.previous}}"),
+    orchestrator.StepOf("review",   reviewAgent,   "Review and improve: {{.previous}}"),
+)
+```
+
+- `{{.input}}` — the original input passed to `Sequential`
+- `{{.previous}}` — the output of the preceding step
+- Step failures wrap the step name: `step "write": ...`
+
+## Parallel fan-out
+
+All agents run concurrently. Results are collected when all finish.
+
+```go
+results, err := orchestrator.Parallel(ctx, "session",
+    orchestrator.FanOf("pros",    proAgent,    "Analyze the pros of Go"),
+    orchestrator.FanOf("cons",    conAgent,    "Analyze the cons of Go"),
+    orchestrator.FanOf("summary", summaryAgent, "Summarize Go"),
+)
+
+for _, r := range results {
+    if r.Error != nil {
+        fmt.Printf("%s failed: %v\n", r.Name, r.Error)
+        continue
+    }
+    fmt.Printf("%s: %s\n", r.Name, r.Output)
+}
+```
+
+`Parallel` **always** returns all results — a failed branch never cancels siblings. Check `ParallelResult.Error` per result.
+
+## Streaming
+
+Use `RunStream` for real-time output:
+
+```go
+stream := agent.RunStream(ctx, "session-1", "Tell me a story.")
+for event := range stream {
+    switch event.Type {
+    case core.StreamEventText:
+        fmt.Print(event.TextDelta)
+    case core.StreamEventDone:
+        fmt.Println()
+    case core.StreamEventError:
+        fmt.Println("error:", event.Error)
+    }
+}
+```

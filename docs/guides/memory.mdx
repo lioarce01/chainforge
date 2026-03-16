@@ -1,0 +1,41 @@
+---
+title: Memory
+description: Persist conversation history across Run calls.
+---
+
+Memory lets an agent remember previous turns within a session. Without memory, each `Run` call starts with a clean context.
+
+## In-memory store
+
+```go
+import "github.com/lioarce01/chainforge/pkg/memory/inmemory"
+
+agent, err := chainforge.NewAgent(
+    // ...
+    chainforge.WithMemory(inmemory.New()),
+)
+
+// First call
+agent.Run(ctx, "session-1", "My name is Alice.")
+
+// Second call — agent remembers "Alice"
+agent.Run(ctx, "session-1", "What is my name?")
+```
+
+Sessions are namespaced by `sessionID`. Different IDs are fully isolated.
+
+## Custom store
+
+Implement `core.MemoryStore` to back memory with Redis, Postgres, or any store:
+
+```go
+type MemoryStore interface {
+    Get(ctx context.Context, sessionID string) ([]Message, error)
+    Append(ctx context.Context, sessionID string, msgs ...Message) error
+    Clear(ctx context.Context, sessionID string) error
+}
+```
+
+## Multi-agent memory isolation
+
+The orchestrator automatically namespaces session IDs per step (`"sessionID:step-N"`), so each agent in a sequential pipeline has isolated history.

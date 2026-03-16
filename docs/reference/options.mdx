@@ -1,0 +1,52 @@
+---
+title: Options
+description: Complete reference for all AgentOption configuration functions.
+---
+
+All options are passed to `chainforge.NewAgent(...)` as functional options.
+
+## Provider & Model
+
+| Option | Type | Description |
+|---|---|---|
+| `WithProvider(p)` | `core.Provider` | **Required.** LLM provider implementation. |
+| `WithModel(model)` | `string` | **Required.** Model identifier (e.g. `"claude-sonnet-4-6"`). |
+
+## Behaviour
+
+| Option | Default | Description |
+|---|---|---|
+| `WithMaxIterations(n)` | `10` | Maximum agent loop iterations before returning `ErrMaxIterations`. |
+| `WithToolTimeout(d)` | `30s` | Per-tool execution timeout. Errors are non-fatal and fed back to the LLM. |
+| `WithMaxTokens(n)` | `4096` | Max tokens per LLM call. |
+| `WithTemperature(f)` | `0.7` | Sampling temperature. |
+
+## Prompt & Tools
+
+| Option | Description |
+|---|---|
+| `WithSystemPrompt(s)` | System message prepended to every conversation. |
+| `WithTools(tools...)` | Register one or more tools. Can be called multiple times. |
+| `WithMemory(m)` | Attach a memory store for cross-run history persistence. |
+
+## MCP
+
+| Option | Description |
+|---|---|
+| `WithMCPServer(s)` | Register a single MCP server. Connection is deferred to the first `Run` call. |
+| `WithMCPServers(servers...)` | Register multiple MCP servers at once. |
+
+## Observability
+
+| Option | Default | Description |
+|---|---|---|
+| `WithLogger(l)` | `slog.Default()` | Structured `slog.Logger`. |
+
+## Errors
+
+| Error | Condition |
+|---|---|
+| `ErrMaxIterations` | Agent loop reached `maxIterations` without a stop reason. |
+| `ErrToolNotFound` | LLM called a tool name that isn't registered. Non-fatal — returned as tool result. |
+| `ErrNoProvider` | `NewAgent` called without `WithProvider`. |
+| `ErrNoModel` | `NewAgent` called without `WithModel`. |

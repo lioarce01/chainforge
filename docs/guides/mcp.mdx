@@ -1,0 +1,111 @@
+---
+title: MCP
+description: Connect any MCP server with a single line.
+---
+
+chainforge supports the [Model Context Protocol](https://modelcontextprotocol.io) out of the box. Tools are discovered automatically on first `Run` and become indistinguishable from built-in tools inside the agent loop.
+
+Tool names are namespaced as `servername__toolname` (e.g. `fs__read_file`) to avoid collisions across servers.
+
+## Streamable HTTP
+
+The modern MCP transport used by Cursor, Claude Code, and hosted MCP services.
+
+```go
+import "github.com/lioarce01/chainforge/pkg/mcp"
+
+chainforge.WithMCPServer(
+    mcp.HTTP("https://docs.langchain.com/mcp").WithName("langchain"),
+)
+```
+
+## Stdio
+
+Launches a subprocess and communicates over stdin/stdout. Requires the command to be installed locally.
+
+```go
+chainforge.WithMCPServer(
+    mcp.Stdio("npx", "-y", "@modelcontextprotocol/server-filesystem", "/tmp").WithName("fs"),
+)
+```
+
+## Multiple servers
+
+```go
+chainforge.WithMCPServers(
+    mcp.HTTP("https://docs.langchain.com/mcp").WithName("langchain"),
+    mcp.Stdio("npx", "-y", "@modelcontextprotocol/server-filesystem", "/tmp").WithName("fs"),
+)
+```
+
+All servers connect in parallel on the first `Run` call.
+
+## Environment variables (Stdio)
+
+Pass secrets to the subprocess without leaking them into `Args`:
+
+```go
+mcp.Stdio("my-server").
+    WithName("myserver").
+    WithEnv("API_KEY=" + os.Getenv("MY_API_KEY"))
+```
+
+## Cleanup
+
+Always defer `Close` to terminate subprocesses and release HTTP connections:
+
+```go
+agent, err := chainforge.NewAgent(...)
+defer agent.Close()
+```
+
+## Error handling
+
+| Scenario | Behavior |
+|---|---|
+| Server fails to connect | Error cached; all subsequent `Run` calls return the same error |
+| Tool call returns an error | Non-fatal — error string fed to LLM as tool result |
+| Context cancelled during connect | Propagates immediately |
+| Multiple concurrent `Run` calls | `sync.Once` guarantees connect runs exactly once |
+
+## Full example
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "os"
+
+    chainforge "github.com/lioarce01/chainforge"
+    "github.com/lioarce01/chainforge/pkg/mcp"
+    "github.com/lioarce01/chainforge/pkg/providers/openai"
+)
+
+func main() {
+    provider := openai.NewWithBaseURL(
+        os.Getenv("OPENROUTER_API_KEY"),
+        "https://openrouter.ai/api/v1",
+        "openrouter",
+    )
+
+    agent, err := chainforge.NewAgent(
+        chainforge.WithProvider(provider),
+        chainforge.WithModel(os.Getenv("MODEL")),
+        chainforge.WithSystemPrompt("You are a helpful assistant."),
+        chainforge.WithMCPServer(mcp.HTTP(os.Getenv("MCP_URL")).WithName("remote")),
+        chainforge.WithMaxIterations(5),
+    )
+    if err != nil {
+        panic(err)
+    }
+    defer agent.Close()
+
+    result, err := agent.Run(context.Background(), "session-1", "What is LangChain?")
+    if err != nil {
+        panic(err)
+    }
+    fmt.Println(result)
+}
+```

@@ -1,0 +1,63 @@
+---
+title: Providers
+description: Connect to any LLM provider with a single line.
+---
+
+chainforge's `core.Provider` interface decouples your agent logic from any specific SDK. Swapping providers requires changing exactly one line.
+
+## Available providers
+
+| Provider | Package | Notes |
+|---|---|---|
+| Anthropic (Claude) | `pkg/providers/anthropic` | |
+| OpenAI | `pkg/providers/openai` | |
+| Ollama | `pkg/providers/ollama` | Local models |
+| Any OpenAI-compatible API | `pkg/providers/openai` | OpenRouter, Kimi, etc. |
+
+## Usage
+
+<CodeGroup>
+
+```go Anthropic
+import "github.com/lioarce01/chainforge/pkg/providers/anthropic"
+
+chainforge.WithProvider(anthropic.New(os.Getenv("ANTHROPIC_API_KEY")))
+```
+
+```go OpenAI
+import "github.com/lioarce01/chainforge/pkg/providers/openai"
+
+chainforge.WithProvider(openai.New(os.Getenv("OPENAI_API_KEY")))
+```
+
+```go Ollama
+import "github.com/lioarce01/chainforge/pkg/providers/ollama"
+
+chainforge.WithProvider(ollama.New("http://localhost:11434"))
+```
+
+```go OpenRouter
+import "github.com/lioarce01/chainforge/pkg/providers/openai"
+
+chainforge.WithProvider(openai.NewWithBaseURL(
+    os.Getenv("OPENROUTER_API_KEY"),
+    "https://openrouter.ai/api/v1",
+    "openrouter",
+))
+```
+
+</CodeGroup>
+
+## Custom provider
+
+Implement `core.Provider` to add any backend:
+
+```go
+type Provider interface {
+    Name() string
+    Chat(ctx context.Context, req ChatRequest) (ChatResponse, error)
+    ChatStream(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error)
+}
+```
+
+`pkg/core` has **zero external dependencies** — a custom provider never pulls any SDK into your binary unless you need it.

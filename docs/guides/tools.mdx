@@ -1,0 +1,56 @@
+---
+title: Tools
+description: Built-in tools, custom function tools, and MCP servers.
+---
+
+Tools let the LLM take actions. chainforge dispatches all tool calls from a single LLM response **concurrently** — each runs in its own goroutine with an independent timeout.
+
+## Built-in tools
+
+```go
+import "github.com/lioarce01/chainforge/pkg/tools/calculator"
+import "github.com/lioarce01/chainforge/pkg/tools/websearch"
+
+chainforge.WithTools(
+    calculator.New(),
+    websearch.New(backend),
+)
+```
+
+| Tool | Package | Description |
+|---|---|---|
+| Calculator | `pkg/tools/calculator` | Safe AST-based math evaluation |
+| WebSearch | `pkg/tools/websearch` | Pluggable search backend |
+
+## Custom tools
+
+Wrap any function as a tool with `tools.Func` — no interface boilerplate:
+
+```go
+import "github.com/lioarce01/chainforge/pkg/tools"
+
+schema := tools.NewSchema().
+    Add("city", tools.Property{Type: tools.TypeString, Description: "City name"}, true).
+    MustBuild()
+
+weatherTool, _ := tools.Func(
+    "get_weather",
+    "Get the current weather for a city",
+    schema,
+    func(ctx context.Context, input string) (string, error) {
+        var args struct{ City string }
+        json.Unmarshal([]byte(input), &args)
+        return fetchWeather(args.City)
+    },
+)
+
+chainforge.WithTools(weatherTool)
+```
+
+## Tool errors
+
+Tool execution errors are **non-fatal**. The error string is returned to the LLM as the tool result so the model can observe and handle it — the agent loop continues.
+
+## MCP servers
+
+Connect any MCP server and its tools are discovered automatically. See the [MCP guide](/guides/mcp).
