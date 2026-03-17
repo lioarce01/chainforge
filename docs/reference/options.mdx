@@ -20,6 +20,8 @@ All options are passed to `chainforge.NewAgent(...)` as functional options.
 | `WithToolTimeout(d)` | `30s` | Per-tool execution timeout. Errors are non-fatal and fed back to the LLM. |
 | `WithMaxTokens(n)` | `4096` | Max tokens per LLM call. |
 | `WithTemperature(f)` | `0.7` | Sampling temperature. |
+| `WithMaxHistory(n)` | `0` (unlimited) | Caps the number of history messages loaded from memory per `Run` call to the most recent `n`. Prevents context window overflow on long sessions. Has no effect when no memory store is attached. |
+| `WithRetry(n)` | — | Wraps the provider with automatic retry on transient errors. `n` is the total number of attempts (1 = no retry, 3 = 2 retries). Uses exponential backoff: 200 ms → 400 ms → 800 ms … capped at 10 s. Context cancellation and deadline errors are never retried. |
 
 ## Prompt & Tools
 
