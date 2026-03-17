@@ -357,12 +357,14 @@ go test ./tests/bench/... -bench=. -benchmem
 
 | Benchmark | ns/op | B/op | allocs/op |
 |---|---|---|---|
-| `AgentRun` (single session) | 3,582 | 1,324 | 17 |
-| `AgentRunWithTool` (tool dispatch) | 3,677 | 1,482 | 19 |
-| `AgentConcurrent` (8 goroutines) | 6,307 | 5,269 | 15 |
-| `AgentRunStream` (stream drain) | 10,074 | 10,297 | 33 |
+| `AgentRun` (single session) | 5,176 | 1,366 | 17 |
+| `AgentRunWithTool` (tool dispatch) | 5,297 | 1,356 | 17 |
+| `AgentRunStream` (stream drain) | 9,132 | 6,984 | 24 |
+| `AgentRunParallelSessions/goroutines=1` | 13,758 | 1,426 | 20 |
+| `AgentRunParallelSessions/goroutines=4` | 117,119 | 5,749 | 74 |
+| `AgentRunParallelSessions/goroutines=16` | 264,049 | 22,917 | 289 |
 
-Tool dispatch adds ~100 ns over a plain `AgentRun`. Concurrent sessions scale linearly with no lock contention.
+Tool dispatch adds ~120 ns over a plain `AgentRun` (single-tool fast path skips goroutine/channel overhead). Concurrent sessions scale linearly with no lock contention.
 
 ### Memory store
 
