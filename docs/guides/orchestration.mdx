@@ -1,6 +1,6 @@
 ---
 title: Orchestration
-description: Sequential pipelines and parallel fan-out across multiple agents.
+description: Sequential pipelines, parallel fan-out, and intelligent routing across multiple agents.
 ---
 
 The orchestrator lets you compose multiple agents into pipelines. Each agent is independent and can have its own provider, tools, and memory.
@@ -45,6 +45,73 @@ for _, r := range results {
 ```
 
 `Parallel` **always** returns all results — a failed branch never cancels siblings. Check `ParallelResult.Error` per result.
+
+## Router
+
+A `Router` dispatches a message to one of several named agents. Useful for building supervisor patterns where different agents handle different types of requests.
+
+### Function-based routing
+
+Pick the route with your own logic — zero LLM overhead:
+
+```go
+router := orchestrator.NewRouter(
+    func(ctx context.Context, input string) (string, error) {
+        if strings.Contains(strings.ToLower(input), "code") {
+            return "coder", nil
+        }
+        return "general", nil
+    },
+    orchestrator.RouteOf("coder",   "writes and debugs code",   coderAgent),
+    orchestrator.RouteOf("general", "answers general questions", generalAgent),
+)
+
+result, err := router.Route(ctx, "session-1", userMessage)
+```
+
+### LLM-based routing
+
+Let a supervisor agent decide which route to use. The supervisor receives the input and a formatted list of available agents:
+
+```go
+supervisor, _ := chainforge.NewAgent(
+    chainforge.WithProvider(p),
+    chainforge.WithModel("claude-haiku-4-5-20251001"), // cheap model for routing
+    chainforge.WithSystemPrompt("You are a routing agent. Reply with only the route name."),
+)
+
+router := orchestrator.NewLLMRouter(supervisor,
+    orchestrator.RouteOf("researcher", "searches and summarises information", researchAgent),
+    orchestrator.RouteOf("coder",      "writes and debugs code",              coderAgent),
+    orchestrator.RouteOf("analyst",    "analyses data and produces reports",  analystAgent),
+)
+
+result, err := router.Route(ctx, "session-1", userMessage)
+```
+
+The supervisor receives a structured prompt listing all routes with their descriptions and must respond with the exact route name.
+
+### Behaviour
+
+- **Session namespacing** — each route runs under `sessionID:routeName`, so agents maintain independent history across calls.
+- **LLM response normalisation** — the supervisor response is trimmed, lowercased, and stripped of quotes to handle common LLM formatting quirks.
+- **Supervisor session** — the LLM supervisor always uses the fixed session `router:supervisor` so routing decisions don't pollute conversation history.
+- **Unknown route error** — returns a clear error listing available route names.
+
+### Combining patterns
+
+Router composes naturally with Sequential and Parallel:
+
+```go
+// Route first, then run a sequential pipeline on the result
+router := orchestrator.NewLLMRouter(supervisor,
+    orchestrator.RouteOf("deep-research", "thorough multi-step research", func() *chainforge.Agent {
+        // This agent internally uses Sequential across research → summarise → cite
+        return researchPipelineAgent
+    }()),
+    orchestrator.RouteOf("quick-answer", "fast single-turn answers", quickAgent),
+)
+```
 
 ## Streaming
 
