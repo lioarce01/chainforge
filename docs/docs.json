@@ -44,6 +44,7 @@
               "guides/tools",
               "guides/mcp",
               "guides/memory",
+              "guides/vector-memory",
               "guides/orchestration"
             ]
           },

@@ -1,0 +1,188 @@
+---
+title: Vector Memory
+description: Persistent, semantically-searchable conversation history backed by Qdrant.
+---
+
+The built-in `inmemory.Store` loses all history on restart and returns every message regardless of size. The Qdrant adapter gives you:
+
+- **Persistence** — history survives process restarts.
+- **Semantic retrieval** — `Get` returns the most recent turns; `Search` finds the most _relevant_ turns for a query.
+- **Scale** — only the top-K messages enter the context window, so sessions can grow indefinitely.
+
+The store plugs into the existing `core.MemoryStore` interface. The agent loop, orchestrator, and providers need zero changes.
+
+---
+
+## Installation
+
+```bash
+go get github.com/lioarce01/chainforge
+```
+
+The Qdrant gRPC client (`github.com/qdrant/go-client`) is pulled in automatically.
+
+---
+
+## Quick start
+
+```go
+import (
+    chainforge "github.com/lioarce01/chainforge"
+    qdrantmem "github.com/lioarce01/chainforge/pkg/memory/qdrant"
+    "github.com/lioarce01/chainforge/pkg/memory/qdrant/embedders"
+)
+
+// OpenAI embeddings + local Qdrant
+store, err := qdrantmem.New(
+    qdrantmem.WithURL("localhost:6334"),
+    qdrantmem.WithEmbedder(embedders.OpenAI(os.Getenv("OPENAI_API_KEY"))),
+)
+if err != nil { log.Fatal(err) }
+defer store.Close()
+
+agent, err := chainforge.NewAgent(
+    chainforge.WithProvider(provider),
+    chainforge.WithModel("your-model"),
+    chainforge.WithMemory(store),
+)
+
+agent.Run(ctx, "session-1", "My name is Alice.")
+agent.Run(ctx, "session-1", "What is my name?") // remembers across restarts
+```
+
+---
+
+## Qdrant setup
+
+<Tabs>
+  <Tab title="Docker (local)">
+    ```bash
+    docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant
+    ```
+    gRPC is on port **6334** (used by chainforge). The REST dashboard is on 6333.
+  </Tab>
+  <Tab title="Qdrant Cloud">
+    1. Create a free cluster at [cloud.qdrant.io](https://cloud.qdrant.io).
+    2. Copy the cluster URL and API key.
+    ```go
+    store, err := qdrantmem.New(
+        qdrantmem.WithURL("https://xyz.cloud.qdrant.io:6334"),
+        qdrantmem.WithAPIKey(os.Getenv("QDRANT_API_KEY")),
+        qdrantmem.WithEmbedder(embedders.OpenAI(os.Getenv("OPENAI_API_KEY"))),
+    )
+    ```
+  </Tab>
+</Tabs>
+
+The collection is created automatically on first use.
+
+---
+
+## Embedders
+
+### OpenAI (`text-embedding-3-small`, 1536 dims)
+
+```go
+import "github.com/lioarce01/chainforge/pkg/memory/qdrant/embedders"
+
+e := embedders.OpenAI(os.Getenv("OPENAI_API_KEY"))
+```
+
+Custom model:
+
+```go
+import gogpt "github.com/sashabaranov/go-openai"
+
+e := embedders.OpenAIWithModel(apiKey, gogpt.LargeEmbedding3, 3072)
+```
+
+Azure / proxy:
+
+```go
+e := embedders.OpenAIWithBaseURL(apiKey, "https://my-azure.openai.azure.com/", gogpt.SmallEmbedding3, 1536)
+```
+
+### Ollama (no new dependencies)
+
+```go
+// nomic-embed-text runs locally and produces 768-dim vectors
+e := embedders.Ollama("http://localhost:11434", "nomic-embed-text", 768)
+```
+
+Pull the model first:
+
+```bash
+ollama pull nomic-embed-text
+```
+
+---
+
+## Get vs Search
+
+| Method | What it returns | When to use |
+|--------|----------------|-------------|
+| `Get(ctx, sessionID)` | Most recent `TopK` messages, ordered oldest→newest | Default agent loop — feed the LLM a recent window |
+| `Search(ctx, sessionID, query, topK)` | Most _semantically similar_ messages to `query` | Explicit retrieval (e.g. "find what the user said about X") |
+
+`Get` uses a Qdrant scroll ordered by `sequence_num DESC` — no embedding call needed.
+
+`Search` is only available on the concrete `*Store` type (not on `core.MemoryStore`):
+
+```go
+store, _ := qdrantmem.New(...)
+
+// Cast to access Search
+results, err := store.Search(ctx, "session-1", "payment preferences", 5)
+```
+
+---
+
+## Configuration reference
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `WithURL(rawURL)` | `"localhost:6334"` | Parse host, port, and TLS from a URL string |
+| `WithHost(host, port)` | — | Set host and port directly |
+| `WithAPIKey(key)` | — | Qdrant Cloud API key |
+| `WithCollectionName(name)` | `"chainforge_memory"` | Qdrant collection name |
+| `WithTopK(k)` | `20` | Max messages returned by `Get` |
+| `WithEmbedder(e)` | — | **Required.** Embedding backend |
+| `WithTLS(enabled)` | auto-detected from URL | Force TLS on/off |
+
+---
+
+## Clearing a session
+
+```go
+err := store.Clear(ctx, "session-1")
+```
+
+All points for that session are deleted from Qdrant and the in-process sequence counter is reset.
+
+---
+
+## Custom embedder
+
+Implement the two-method interface to use any embedding API:
+
+```go
+type Embedder interface {
+    Embed(ctx context.Context, text string) ([]float32, error)
+    Dims() uint64
+}
+```
+
+Pass it with `WithEmbedder(myEmbedder)`.
+
+---
+
+## Full example
+
+See [`examples/qdrant-memory-agent/`](https://github.com/lioarce01/chainforge/tree/main/examples/qdrant-memory-agent) for a runnable interactive agent that persists memory across restarts.
+
+```bash
+docker run -p 6334:6334 qdrant/qdrant
+
+OPENROUTER_API_KEY=... OPENAI_API_KEY=sk-... MODEL=... \
+  go run ./examples/qdrant-memory-agent/
+```
