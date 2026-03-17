@@ -138,6 +138,44 @@ chainforge.WithLogging(logger),  // logging wraps rawProvider
 chainforge.WithTracing(),        // tracing wraps the logged provider
 ```
 
+## Prometheus metrics
+
+`pkg/middleware/metrics` records three metric families for every provider call.
+
+### Setup
+
+```go
+import (
+    "github.com/prometheus/client_golang/prometheus"
+    "github.com/lioarce01/chainforge/pkg/middleware/metrics"
+)
+
+// Register on any prometheus.Registerer (use NewRegistry() in tests)
+mp, err := metrics.New(provider, prometheus.DefaultRegisterer)
+// or panic on registration error:
+mp = metrics.MustNew(provider, prometheus.DefaultRegisterer)
+
+agent, _ := chainforge.NewAgent(chainforge.WithProvider(mp), chainforge.WithModel(model))
+```
+
+Via `ProviderBuilder`:
+
+```go
+p := chainforge.NewProviderBuilder(provider).
+    WithMetrics(prometheus.DefaultRegisterer).
+    Build()
+```
+
+### Metrics emitted
+
+| Metric | Type | Labels | Notes |
+|---|---|---|---|
+| `chainforge_provider_requests_total` | Counter | `provider`, `status` (`ok`\|`error`) | Incremented after each call completes |
+| `chainforge_provider_request_duration_seconds` | Histogram | `provider` | Latency in seconds; for streams covers open → channel close |
+| `chainforge_provider_tokens_total` | Counter | `provider`, `token_type` (`input`\|`output`) | From `Usage` in the response or `Done` stream event |
+
+For `ChatStream`, all three metrics are recorded **after the channel is fully drained**, not at stream-open time.
+
 ## Server logs
 
 The HTTP server emits JSON logs for every request:

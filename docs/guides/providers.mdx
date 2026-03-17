@@ -7,46 +7,57 @@ chainforge's `core.Provider` interface decouples your agent logic from any speci
 
 ## Available providers
 
-| Provider | Package | Notes |
+| Provider | Package | Shorthand |
 |---|---|---|
-| Anthropic (Claude) | `pkg/providers/anthropic` | |
-| OpenAI | `pkg/providers/openai` | |
-| Ollama | `pkg/providers/ollama` | Local models |
-| Any OpenAI-compatible API | `pkg/providers/openai` | OpenRouter, Kimi, etc. |
+| Anthropic (Claude) | `pkg/providers/anthropic` | `WithAnthropic(key, model)` |
+| OpenAI | `pkg/providers/openai` | `WithOpenAI(key, model)` |
+| Google Gemini | `pkg/providers/gemini` | `WithGemini(key, model)` |
+| Ollama | `pkg/providers/ollama` | `WithOllama(url, model)` |
+| Any OpenAI-compatible API | `pkg/providers/openai` | `WithOpenAICompatible(key, url, name, model)` |
 
 ## Usage
 
 <CodeGroup>
 
 ```go Anthropic
-import "github.com/lioarce01/chainforge/pkg/providers/anthropic"
-
-chainforge.WithProvider(anthropic.New(os.Getenv("ANTHROPIC_API_KEY")))
+chainforge.WithAnthropic(os.Getenv("ANTHROPIC_API_KEY"), "claude-sonnet-4-6")
 ```
 
 ```go OpenAI
-import "github.com/lioarce01/chainforge/pkg/providers/openai"
+chainforge.WithOpenAI(os.Getenv("OPENAI_API_KEY"), "gpt-4o")
+```
 
-chainforge.WithProvider(openai.New(os.Getenv("OPENAI_API_KEY")))
+```go Gemini
+chainforge.WithGemini(os.Getenv("GEMINI_API_KEY"), "gemini-2.0-flash")
 ```
 
 ```go Ollama
-import "github.com/lioarce01/chainforge/pkg/providers/ollama"
-
-chainforge.WithProvider(ollama.New("http://localhost:11434"))
+chainforge.WithOllama("http://localhost:11434", "llama3")
+// empty URL defaults to http://localhost:11434/v1
+chainforge.WithOllama("", "llama3")
 ```
 
 ```go OpenRouter
-import "github.com/lioarce01/chainforge/pkg/providers/openai"
-
-chainforge.WithProvider(openai.NewWithBaseURL(
+chainforge.WithOpenAICompatible(
     os.Getenv("OPENROUTER_API_KEY"),
     "https://openrouter.ai/api/v1",
     "openrouter",
-))
+    "openai/gpt-4o-mini",
+)
 ```
 
 </CodeGroup>
+
+## Gemini convenience constructors
+
+The `pkg/providers/gemini` package includes named constructors for common models:
+
+```go
+import "github.com/lioarce01/chainforge/pkg/providers/gemini"
+
+p, err := gemini.NewFlash(apiKey)  // gemini-2.0-flash — fast, cost-effective
+p, err := gemini.NewPro(apiKey)    // gemini-2.0-pro
+```
 
 ## Custom provider
 

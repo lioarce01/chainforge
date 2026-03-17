@@ -20,6 +20,7 @@ These one-call shortcuts set both provider and model atomically:
 |---|---|
 | `WithAnthropic(apiKey, model)` | `WithProvider(anthropic.New(apiKey))` + `WithModel(model)` |
 | `WithOpenAI(apiKey, model)` | `WithProvider(openai.New(apiKey))` + `WithModel(model)` |
+| `WithGemini(apiKey, model)` | `WithProvider(gemini.New(apiKey, model))` + `WithModel(model)` |
 | `WithOllama(baseURL, model)` | `WithProvider(ollama.New(baseURL))` + `WithModel(model)` |
 | `WithOpenAICompatible(apiKey, baseURL, name, model)` | `WithProvider(openai.NewWithBaseURL(...))` + `WithModel(model)` |
 
@@ -59,6 +60,7 @@ model: claude-sonnet-4-6
 |---|---|---|
 | `WithMaxIterations(n)` | `10` | Maximum agent loop iterations before returning `ErrMaxIterations`. |
 | `WithToolTimeout(d)` | `30s` | Per-tool execution timeout. Errors are non-fatal and fed back to the LLM. |
+| `WithRunTimeout(d)` | `0` (none) | Per-run deadline applied to the entire `Run`/`RunWithUsage` call. Returns `context.DeadlineExceeded` if the loop does not finish in time. `0` means no timeout. |
 | `WithMaxTokens(n)` | `4096` | Max tokens per LLM call. |
 | `WithTemperature(f)` | `0.7` | Sampling temperature. |
 | `WithMaxHistory(n)` | `0` (unlimited) | Caps the number of history messages loaded from memory per `Run` call to the most recent `n`. Prevents context window overflow on long sessions. Has no effect when no memory store is attached. |
@@ -93,8 +95,12 @@ model: claude-sonnet-4-6
 
 ```go
 p := chainforge.NewProviderBuilder(anthropic.New(apiKey)).
-    WithRetry(3).       // retry first (innermost)
-    WithLogging(logger). // log retried calls
+    WithRetry(3).                                     // retry first (innermost)
+    WithRateLimit(10, 20).                            // 10 rps, burst 20
+    WithFallback(openai.New(os.Getenv("OPENAI_API_KEY"))). // fallback on error
+    WithMetrics(prometheus.DefaultRegisterer).        // Prometheus metrics
+    WithLogging(logger).                              // log every call
+    WithTracing().                                    // OTel spans (outermost)
     Build()
 
 agent, _ := chainforge.NewAgent(
@@ -107,11 +113,33 @@ agent, _ := chainforge.NewAgent(
 |---|---|
 | `NewProviderBuilder(base)` | Start building from a base provider |
 | `.WithRetry(maxAttempts)` | Add exponential-backoff retry |
+| `.WithRateLimit(rps, burst)` | Add token-bucket rate limiting; blocks until a token is available or context is cancelled |
+| `.WithFallback(fallbacks...)` | Add fallback chain; tries each provider in order on error |
+| `.WithMetrics(reg)` | Add Prometheus metrics (requests, latency, tokens) |
 | `.WithLogging(logger)` | Add slog logging (nil → `slog.Default()`) |
 | `.WithTracing()` | Add OpenTelemetry spans |
 | `.Build()` | Return the composed provider |
 
 `Build` is idempotent — wrappers are applied in the order they were registered.
+
+### RunWithUsage
+
+`Run` discards token counts. Use `RunWithUsage` to receive the total `core.Usage` accumulated across all iterations of the agent loop:
+
+```go
+result, usage, err := agent.RunWithUsage(ctx, "session-1", "Hello")
+fmt.Printf("input=%d output=%d\n", usage.InputTokens, usage.OutputTokens)
+```
+
+`RunStream` emits usage on the final `Done` event:
+
+```go
+for ev := range agent.RunStream(ctx, "session-1", "Hello") {
+    if ev.Type == core.StreamEventDone && ev.Usage != nil {
+        fmt.Printf("tokens: %d in / %d out\n", ev.Usage.InputTokens, ev.Usage.OutputTokens)
+    }
+}
+```
 
 Both `WithLogging` and `WithTracing` are applied after all other options are resolved, so their position relative to `WithProvider` does not matter. They can be stacked:
 

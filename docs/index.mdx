@@ -13,7 +13,7 @@ go get github.com/lioarce01/chainforge
 
 <CardGroup cols={2}>
   <Card title="Provider-agnostic" icon="shuffle">
-    Anthropic, OpenAI, Ollama, or any OpenAI-compatible API. Switch with one line, zero other changes.
+    Anthropic, OpenAI, Gemini, Ollama, or any OpenAI-compatible API. Switch with one line, zero other changes.
   </Card>
   <Card title="MCP client" icon="plug">
     Connect any MCP server via Streamable HTTP or Stdio. Tools are auto-discovered and namespaced.
@@ -31,7 +31,10 @@ go get github.com/lioarce01/chainforge
     Production-ready chi router with SSE streaming, CORS, liveness/readiness probes, and graceful shutdown. One import away.
   </Card>
   <Card title="Observability" icon="chart-line">
-    OpenTelemetry tracing and structured slog logging via drop-in middleware. Zero changes to agent code required.
+    OpenTelemetry tracing, structured slog logging, and Prometheus metrics via drop-in middleware. Zero changes to agent code required.
+  </Card>
+  <Card title="Resilience middleware" icon="shield">
+    Token-bucket rate limiting, multi-provider fallback chains, and tool result caching — all composable via `ProviderBuilder`.
   </Card>
 </CardGroup>
 
@@ -40,18 +43,20 @@ go get github.com/lioarce01/chainforge
 ```go
 import (
     chainforge "github.com/lioarce01/chainforge"
-    "github.com/lioarce01/chainforge/pkg/providers/anthropic"
     "github.com/lioarce01/chainforge/pkg/tools/calculator"
 )
 
 agent, err := chainforge.NewAgent(
-    chainforge.WithProvider(anthropic.New(os.Getenv("ANTHROPIC_API_KEY"))),
-    chainforge.WithModel("claude-sonnet-4-6"),
+    chainforge.WithAnthropic(os.Getenv("ANTHROPIC_API_KEY"), "claude-sonnet-4-6"),
     chainforge.WithSystemPrompt("You are a helpful assistant."),
     chainforge.WithTools(calculator.New()),
 )
 
 result, err := agent.Run(ctx, "session-1", "What is 2^10 + 144?")
+
+// Need token usage?
+result, usage, err := agent.RunWithUsage(ctx, "session-1", "What is 2^10 + 144?")
+fmt.Printf("tokens: %d in / %d out\n", usage.InputTokens, usage.OutputTokens)
 ```
 
 <Card title="Quickstart" icon="rocket" href="/quickstart">

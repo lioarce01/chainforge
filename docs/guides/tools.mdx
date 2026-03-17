@@ -136,6 +136,29 @@ func(ctx context.Context, input string) (string, error) {
 
 `ParseInput` returns a `tools: invalid input: ...` error on malformed JSON.
 
+## Cached tools
+
+Wrap any tool with `CachedTool` to memoize results by input JSON string. Useful for expensive or rate-limited tools that may be called repeatedly with the same arguments.
+
+```go
+import "github.com/lioarce01/chainforge/pkg/tools"
+
+cached := tools.NewCachedTool(expensiveTool)
+
+chainforge.WithTools(cached)
+```
+
+**Behaviour:**
+- Results (including errors) are stored by exact input JSON string.
+- Concurrent calls with the same input call the inner tool **exactly once** — subsequent calls return the cached value.
+- Call `cached.InvalidateAll()` to flush the cache on demand.
+
+```go
+cached.InvalidateAll()  // force re-execution on next call
+```
+
+`CachedTool` delegates `Definition()` to the wrapped tool, so the LLM sees the same schema.
+
 ## Tool errors
 
 Tool execution errors are **non-fatal**. The error string is returned to the LLM as the tool result so the model can observe and handle it — the agent loop continues.

@@ -11,6 +11,8 @@ go get github.com/lioarce01/chainforge
 
 ## 1. Create an agent
 
+Use a provider shorthand to set both provider and model in one call:
+
 ```go
 package main
 
@@ -20,15 +22,13 @@ import (
     "os"
 
     chainforge "github.com/lioarce01/chainforge"
-    "github.com/lioarce01/chainforge/pkg/providers/openai"
     "github.com/lioarce01/chainforge/pkg/tools/calculator"
     "github.com/lioarce01/chainforge/pkg/memory/inmemory"
 )
 
 func main() {
     agent, err := chainforge.NewAgent(
-        chainforge.WithProvider(openai.New(os.Getenv("OPENAI_API_KEY"))),
-        chainforge.WithModel("gpt-4o-mini"),
+        chainforge.WithOpenAI(os.Getenv("OPENAI_API_KEY"), "gpt-4o-mini"),
         chainforge.WithSystemPrompt("You are a helpful assistant."),
         chainforge.WithTools(calculator.New()),
         chainforge.WithMemory(inmemory.New()),
@@ -47,6 +47,15 @@ func main() {
 }
 ```
 
+Provider shortcuts available out of the box:
+
+| Shorthand | Provider |
+|---|---|
+| `WithAnthropic(key, model)` | Anthropic (Claude) |
+| `WithOpenAI(key, model)` | OpenAI |
+| `WithGemini(key, model)` | Google Gemini |
+| `WithOllama(url, model)` | Ollama (local) |
+
 ## 2. Run it
 
 ```bash
@@ -63,10 +72,11 @@ API_KEY=sk-or-... BASE_URL=https://openrouter.ai/api/v1 MODEL=openai/gpt-4o-mini
 ```
 
 ```go
-provider := openai.NewWithBaseURL(
+chainforge.WithOpenAICompatible(
     os.Getenv("API_KEY"),
     os.Getenv("BASE_URL"),
     "openrouter",
+    os.Getenv("MODEL"),
 )
 ```
 
@@ -81,15 +91,44 @@ log.Fatal(chainforge.Serve(":8080", agent))
 This exposes `POST /v1/chat`, `POST /v1/chat/stream` (SSE), and `GET /healthz`.
 It blocks until `SIGINT`/`SIGTERM` and shuts down gracefully.
 
-## 5. Add logging and tracing
+## 5. Add middleware
 
 ```go
 agent, _ := chainforge.NewAgent(
-    chainforge.WithProvider(openai.New(os.Getenv("OPENAI_API_KEY"))),
-    chainforge.WithModel("gpt-4o-mini"),
-    chainforge.WithLogging(slog.Default()),  // logs every LLM call
+    chainforge.WithOpenAI(os.Getenv("OPENAI_API_KEY"), "gpt-4o-mini"),
+    chainforge.WithLogging(slog.Default()),  // structured logs per LLM call
     chainforge.WithTracing(),                // OTel spans (noop if not configured)
+    chainforge.WithRetry(3),                 // exponential backoff on transient errors
+    chainforge.WithRunTimeout(30*time.Second), // per-run deadline
 )
+```
+
+For rate limiting, Prometheus metrics, or fallback providers, use `ProviderBuilder`:
+
+```go
+import (
+    "github.com/prometheus/client_golang/prometheus"
+    chainforge "github.com/lioarce01/chainforge"
+    "github.com/lioarce01/chainforge/pkg/providers/openai"
+    "github.com/lioarce01/chainforge/pkg/providers/anthropic"
+)
+
+p := chainforge.NewProviderBuilder(openai.New(os.Getenv("OPENAI_API_KEY"))).
+    WithRateLimit(10, 20).                              // 10 rps, burst 20
+    WithFallback(anthropic.New(os.Getenv("ANTHROPIC_API_KEY"))).
+    WithMetrics(prometheus.DefaultRegisterer).
+    Build()
+
+agent, _ := chainforge.NewAgent(chainforge.WithProvider(p), chainforge.WithModel("gpt-4o-mini"))
+```
+
+## 6. Get token usage
+
+`Run` discards token counts. Use `RunWithUsage` when you need them:
+
+```go
+result, usage, err := agent.RunWithUsage(ctx, "session-1", "Hello")
+fmt.Printf("input=%d output=%d\n", usage.InputTokens, usage.OutputTokens)
 ```
 
 ## Next steps
