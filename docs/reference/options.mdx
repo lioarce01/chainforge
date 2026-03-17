@@ -70,7 +70,7 @@ model: claude-sonnet-4-6
 |---|---|
 | `WithSystemPrompt(s)` | System message prepended to every conversation. |
 | `WithTools(tools...)` | Register one or more tools. Can be called multiple times. |
-| `WithMemory(m)` | Attach a memory store for cross-run history persistence. |
+| `WithMemory(m)` | Attach a memory store for cross-run history persistence. Built-in stores: `inmemory`, `sqlite`, `postgres`, `redis`, `qdrant`. See the [Memory guide](/guides/memory). |
 
 ## MCP
 

@@ -23,7 +23,7 @@ result, err := agent.Run(ctx, "session-1", "What is 2^10 + 144?")
 - **Schema builder** — typed shorthand methods (`AddString`, `AddInt`, …) and struct-tag generation (`SchemaFromStruct[T]`)
 - **Multi-agent orchestration** — sequential pipelines, parallel fan-out, and LLM-driven routing
 - **Streaming** — `RunStream()` returns a channel of events
-- **Memory** — pluggable `MemoryStore`; in-memory and Qdrant vector store included
+- **Memory** — pluggable `MemoryStore`; in-memory, SQLite, PostgreSQL, Redis, and Qdrant vector store included
 - **Vector memory** — Qdrant adapter with `NewWithOpenAI` / `NewWithOllama` one-call constructors
 - **Structured logging** — `slog`-based, configurable via `WithLogger` or `WithLogging`
 - **Middleware** — `ProviderBuilder` for explicit retry + logging + tracing composition
@@ -178,22 +178,35 @@ result, err := router.Route(ctx, "session-1", userMessage)
 
 ## Memory
 
+| Store | Package | Infrastructure |
+|---|---|---|
+| In-memory | `pkg/memory/inmemory` | None |
+| SQLite | `pkg/memory/sqlite` | None (pure Go) |
+| PostgreSQL | `pkg/memory/postgres` | Postgres server |
+| Redis | `pkg/memory/redis` | Redis server |
+| Qdrant | `pkg/memory/qdrant` | Qdrant + embedder |
+
 ```go
 // In-memory (no deps, resets on restart)
 chainforge.WithMemory(inmemory.New())
 
+// SQLite (zero infra, persists to disk)
+store, _ := sqlite.New("./chat.db")
+store, _ := sqlite.NewInMemory()           // ":memory:" — great for tests
+
+// PostgreSQL
+store, _ := postgres.New(os.Getenv("DATABASE_URL"))
+store, _ := postgres.New(os.Getenv("DATABASE_URL"), postgres.WithSchemaName("myapp"))
+
+// Redis (with optional sliding-window TTL)
+store, _ := redis.New("localhost:6379")
+store, _ := redis.NewFromURL(os.Getenv("REDIS_URL"), redis.WithTTL(24*time.Hour))
+
 // Qdrant (persistent, semantic search)
-store, err := qdrantmem.NewWithOpenAI(
-    "localhost:6334",
-    "",                                  // Qdrant API key (empty for local)
-    os.Getenv("OPENAI_API_KEY"),
-)
-store, err = qdrantmem.NewWithOllama(
-    "localhost:6334",
-    "http://localhost:11434",
-    "nomic-embed-text",
-    768,
-)
+store, _ := qdrantmem.NewWithOpenAI("localhost:6334", "", os.Getenv("OPENAI_API_KEY"))
+store, _ := qdrantmem.NewWithOllama("localhost:6334", "http://localhost:11434", "nomic-embed-text", 768)
+
+// All plug in identically
 chainforge.WithMemory(store)
 ```
 
@@ -302,7 +315,7 @@ go run ./cmd/bench/main.go --config config.yaml --concurrency 4 --requests 20 --
 pkg/core/           # Provider, Tool, MemoryStore interfaces — zero external deps
 pkg/providers/      # Anthropic, OpenAI, Ollama adapters
 pkg/tools/          # Calculator, WebSearch, FuncTool, Schema builder, SchemaFromStruct, ParseInput
-pkg/memory/         # InMemoryStore, Qdrant vector store with convenience constructors
+pkg/memory/         # InMemoryStore, SQLite, PostgreSQL, Redis, Qdrant vector store
 pkg/mcp/            # MCP client — Streamable HTTP and Stdio transports
 pkg/orchestrator/   # Sequential, Parallel, Router
 pkg/middleware/     # Logging, retry, OpenTelemetry middleware
@@ -310,7 +323,7 @@ pkg/server/         # HTTP server — SSE adapter, chi router, handlers
 pkg/benchutil/      # MockProvider, LatencyRecorder
 cmd/server/         # Production binary with graceful shutdown
 cmd/bench/          # E2E latency CLI
-examples/           # single-agent, multi-agent, mcp-agent, qdrant-memory-agent, server-agent
+examples/           # single-agent, multi-agent, mcp-agent, qdrant/sqlite/postgres/redis-memory-agent, server-agent
 tests/bench/        # Micro-benchmarks (agent, memory, streaming)
 tests/              # Unit tests
 ```
