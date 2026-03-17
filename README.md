@@ -15,18 +15,23 @@ result, err := agent.Run(ctx, "session-1", "What is 2^10 + 144?")
 
 ## Features
 
-- **Provider-agnostic** — swap Anthropic, OpenAI, or Ollama with one line; `pkg/core` has zero external dependencies
-- **Provider shortcuts** — `WithAnthropic`, `WithOpenAI`, `WithOllama`, `WithOpenAICompatible` set provider + model atomically
+- **Provider-agnostic** — swap Anthropic, OpenAI, Ollama, or Gemini with one line; `pkg/core` has zero external dependencies
+- **Provider shortcuts** — `WithAnthropic`, `WithOpenAI`, `WithOllama`, `WithGemini`, `WithOpenAICompatible` set provider + model atomically
 - **Config file** — `FromConfigFile("config.yaml")` loads provider config from YAML
 - **MCP client** — connect any MCP server (Streamable HTTP or Stdio) with a single line; tools become indistinguishable from built-in tools
 - **Concurrent tool dispatch** — multiple tool calls from one LLM response run in parallel goroutines
 - **Schema builder** — typed shorthand methods (`AddString`, `AddInt`, …) and struct-tag generation (`SchemaFromStruct[T]`)
 - **Multi-agent orchestration** — sequential pipelines, parallel fan-out, and LLM-driven routing
-- **Streaming** — `RunStream()` returns a channel of events
+- **Streaming** — `RunStream()` returns a channel of events; `RunWithUsage()` exposes accumulated token counts
 - **Memory** — pluggable `MemoryStore`; in-memory, SQLite, PostgreSQL, Redis, and Qdrant vector store included
 - **Vector memory** — Qdrant adapter with `NewWithOpenAI` / `NewWithOllama` one-call constructors
 - **Structured logging** — `slog`-based, configurable via `WithLogger` or `WithLogging`
-- **Middleware** — `ProviderBuilder` for explicit retry + logging + tracing composition
+- **Middleware** — `ProviderBuilder` for explicit retry + logging + tracing + rate limiting + Prometheus metrics + fallback composition
+- **Rate limiting** — token-bucket `WithRateLimit` middleware; blocks until a token is available or context is cancelled
+- **Prometheus metrics** — `WithMetrics` records request count, latency histogram, and token counters per provider
+- **Fallback providers** — `WithFallback` tries providers in order; transparent to the agent loop
+- **Tool caching** — `CachedTool` memoizes tool results by input; exactly-once semantics under concurrency
+- **Run timeout** — `WithRunTimeout` sets a per-run deadline independent of individual tool timeouts
 - **OpenTelemetry** — distributed tracing via `pkg/middleware/otel`
 - **HTTP server** — production-ready chi router with SSE streaming, CORS, and graceful shutdown
 
@@ -43,6 +48,7 @@ go get github.com/lioarce01/chainforge
 | Anthropic (Claude) | `WithAnthropic(apiKey, model)` |
 | OpenAI | `WithOpenAI(apiKey, model)` |
 | Ollama (local) | `WithOllama(baseURL, model)` |
+| Google Gemini | `WithGemini(apiKey, model)` |
 | Any OpenAI-compatible API | `WithOpenAICompatible(apiKey, baseURL, name, model)` |
 
 ```go
@@ -50,6 +56,11 @@ go get github.com/lioarce01/chainforge
 chainforge.WithAnthropic(os.Getenv("ANTHROPIC_API_KEY"), "claude-sonnet-4-6")
 chainforge.WithOpenAI(os.Getenv("OPENAI_API_KEY"), "gpt-4o")
 chainforge.WithOllama("", "llama3")  // empty baseURL → http://localhost:11434/v1
+chainforge.WithGemini(os.Getenv("GEMINI_API_KEY"), "gemini-2.0-flash")
+
+// Gemini convenience constructors (pkg/providers/gemini)
+p, _ := gemini.NewFlash(apiKey)  // gemini-2.0-flash
+p, _ := gemini.NewPro(apiKey)    // gemini-2.0-pro
 
 // Or from a YAML config file
 agent, err := chainforge.FromConfigFile("config.yaml", chainforge.WithTools(myTool))
@@ -70,6 +81,20 @@ model: claude-sonnet-4-6
 ```go
 chainforge.WithTools(calculator.New())
 chainforge.WithTools(websearch.New(backend))
+```
+
+### Cached tool
+
+Wrap any tool with `CachedTool` to memoize results by input JSON. Errors are also cached.
+Concurrent calls with the same input call the inner tool exactly once.
+
+```go
+import "github.com/lioarce01/chainforge/pkg/tools"
+
+cached := tools.NewCachedTool(expensiveTool)
+cached.InvalidateAll() // flush cache on demand
+
+chainforge.WithTools(cached)
 ```
 
 ### Custom tool
@@ -212,7 +237,7 @@ chainforge.WithMemory(store)
 
 ## Middleware
 
-Layer retry, logging, and tracing onto any provider — via agent options or `ProviderBuilder` for explicit ordering:
+Layer retry, logging, tracing, rate limiting, Prometheus metrics, and fallback onto any provider — via agent options or `ProviderBuilder` for explicit ordering:
 
 ```go
 // Via agent options (applied in registration order)
@@ -226,11 +251,72 @@ chainforge.NewAgent(
 // Via ProviderBuilder (share a pre-built provider across agents)
 p := chainforge.NewProviderBuilder(anthropic.New(apiKey)).
     WithRetry(3).
+    WithRateLimit(10, 20).           // 10 rps sustained, burst 20
+    WithMetrics(prometheus.DefaultRegisterer).
+    WithFallback(openai.New(apiKey)).// fall through to OpenAI on error
     WithLogging(logger).
     WithTracing().
     Build()
 
 agent, _ := chainforge.NewAgent(chainforge.WithProvider(p), chainforge.WithModel(model))
+```
+
+### Rate limiting
+
+Token-bucket rate limiter wraps any provider. `Chat` and `ChatStream` block until a token is available or the context is cancelled.
+
+```go
+import "github.com/lioarce01/chainforge/pkg/middleware/ratelimit"
+
+rl := ratelimit.New(provider, 10.0, 20) // 10 rps, burst 20
+```
+
+### Prometheus metrics
+
+Records three metric families per provider:
+
+| Metric | Type | Labels |
+|---|---|---|
+| `chainforge_provider_requests_total` | Counter | `provider`, `status` (`ok`\|`error`) |
+| `chainforge_provider_request_duration_seconds` | Histogram | `provider` |
+| `chainforge_provider_tokens_total` | Counter | `provider`, `token_type` (`input`\|`output`) |
+
+```go
+import "github.com/lioarce01/chainforge/pkg/middleware/metrics"
+
+mp, err := metrics.New(provider, prometheus.DefaultRegisterer)
+// or panic on error:
+mp = metrics.MustNew(provider, prometheus.NewRegistry())
+```
+
+### Fallback provider
+
+Tries providers in order; returns the first success or the last error if all fail. Only the stream-open call is retried (mid-stream errors are not).
+
+```go
+import "github.com/lioarce01/chainforge/pkg/middleware/fallback"
+
+fp := fallback.New(primaryProvider, backup1, backup2)
+// fp.Name() → "primary/backup1/backup2"
+```
+
+## RunWithUsage
+
+`Run` discards token usage. Use `RunWithUsage` when you need the accumulated counts:
+
+```go
+result, usage, err := agent.RunWithUsage(ctx, "session-1", "Hello")
+fmt.Printf("input=%d output=%d\n", usage.InputTokens, usage.OutputTokens)
+```
+
+`RunStream` also emits usage on the final `Done` event:
+
+```go
+for ev := range agent.RunStream(ctx, "session-1", "Hello") {
+    if ev.Type == core.StreamEventDone && ev.Usage != nil {
+        fmt.Printf("tokens: %d in / %d out\n", ev.Usage.InputTokens, ev.Usage.OutputTokens)
+    }
+}
 ```
 
 ## Options Reference
@@ -240,6 +326,7 @@ agent, _ := chainforge.NewAgent(chainforge.WithProvider(p), chainforge.WithModel
 | `WithAnthropic(key, model)` | — | Anthropic provider + model shorthand |
 | `WithOpenAI(key, model)` | — | OpenAI provider + model shorthand |
 | `WithOllama(url, model)` | — | Ollama provider + model shorthand |
+| `WithGemini(key, model)` | — | Google Gemini provider + model shorthand |
 | `WithOpenAICompatible(key, url, name, model)` | — | OpenAI-compatible provider shorthand |
 | `WithProvider(p)` | — | Set provider explicitly |
 | `WithModel(model)` | — | Set model identifier |
@@ -249,6 +336,7 @@ agent, _ := chainforge.NewAgent(chainforge.WithProvider(p), chainforge.WithModel
 | `WithMCPServer(s)` | — | Register an MCP server |
 | `WithMaxIterations(n)` | `10` | Max agent loop iterations |
 | `WithToolTimeout(d)` | `30s` | Per-tool execution timeout |
+| `WithRunTimeout(d)` | `0` (none) | Per-run deadline; returns `context.DeadlineExceeded` on expiry |
 | `WithMaxTokens(n)` | `4096` | Max tokens per LLM call |
 | `WithTemperature(f)` | `0.7` | Sampling temperature |
 | `WithMaxHistory(n)` | `0` (unlimited) | Cap messages loaded from memory per run |
@@ -312,20 +400,25 @@ go run ./cmd/bench/main.go --config config.yaml --concurrency 4 --requests 20 --
 ## Project Structure
 
 ```
-pkg/core/           # Provider, Tool, MemoryStore interfaces — zero external deps
-pkg/providers/      # Anthropic, OpenAI, Ollama adapters
-pkg/tools/          # Calculator, WebSearch, FuncTool, Schema builder, SchemaFromStruct, ParseInput
-pkg/memory/         # InMemoryStore, SQLite, PostgreSQL, Redis, Qdrant vector store
-pkg/mcp/            # MCP client — Streamable HTTP and Stdio transports
-pkg/orchestrator/   # Sequential, Parallel, Router
-pkg/middleware/     # Logging, retry, OpenTelemetry middleware
-pkg/server/         # HTTP server — SSE adapter, chi router, handlers
-pkg/benchutil/      # MockProvider, LatencyRecorder
-cmd/server/         # Production binary with graceful shutdown
-cmd/bench/          # E2E latency CLI
-examples/           # single-agent, multi-agent, mcp-agent, qdrant/sqlite/postgres/redis-memory-agent, server-agent
-tests/bench/        # Micro-benchmarks (agent, memory, streaming)
-tests/              # Unit tests
+pkg/core/                    # Provider, Tool, MemoryStore interfaces — zero external deps
+pkg/providers/               # Anthropic, OpenAI, Ollama, Gemini adapters
+pkg/tools/                   # Calculator, WebSearch, FuncTool, CachedTool, Schema builder, SchemaFromStruct, ParseInput
+pkg/memory/                  # InMemoryStore, SQLite, PostgreSQL, Redis, Qdrant vector store
+pkg/mcp/                     # MCP client — Streamable HTTP and Stdio transports
+pkg/orchestrator/            # Sequential, Parallel, Router
+pkg/middleware/logging/      # slog request/response logging
+pkg/middleware/retry/        # Exponential-backoff retry
+pkg/middleware/otel/         # OpenTelemetry tracing spans
+pkg/middleware/ratelimit/    # Token-bucket rate limiting
+pkg/middleware/metrics/      # Prometheus request/latency/token metrics
+pkg/middleware/fallback/     # Multi-provider fallback chain
+pkg/server/                  # HTTP server — SSE adapter, chi router, handlers
+pkg/benchutil/               # MockProvider, LatencyRecorder
+cmd/server/                  # Production binary with graceful shutdown
+cmd/bench/                   # E2E latency CLI
+examples/                    # single-agent, multi-agent, mcp-agent, qdrant/sqlite/postgres/redis-memory-agent, server-agent
+tests/bench/                 # Micro-benchmarks (agent, memory, streaming)
+tests/                       # Unit tests
 ```
 
 ## Running Tests
@@ -337,6 +430,7 @@ go test ./...
 # Integration tests (requires API keys)
 ANTHROPIC_API_KEY=sk-... go test -tags=integration ./tests/integration/...
 OPENAI_API_KEY=sk-...    go test -tags=integration ./tests/integration/...
+GEMINI_API_KEY=...       go test -tags=integration ./tests/integration/...
 
 # Micro-benchmarks
 go test ./tests/bench/... -bench=. -benchmem

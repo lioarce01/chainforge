@@ -90,18 +90,31 @@ func (a *Agent) Close() error {
 // Run executes the agent loop synchronously and returns the final text response.
 // sessionID namespaces memory; use different IDs for independent conversations.
 func (a *Agent) Run(ctx context.Context, sessionID, userMessage string) (string, error) {
+	result, _, err := a.RunWithUsage(ctx, sessionID, userMessage)
+	return result, err
+}
+
+// RunWithUsage is like Run but also returns the total token usage accumulated
+// across all LLM calls in the agentic loop.
+func (a *Agent) RunWithUsage(ctx context.Context, sessionID, userMessage string) (string, core.Usage, error) {
+	if a.cfg.runTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, a.cfg.runTimeout)
+		defer cancel()
+	}
+
 	start := time.Now()
 
 	// Connect MCP servers exactly once across all Run calls.
 	a.mcpOnce.Do(func() { a.mcpErr = a.connectMCP(ctx) })
 	if a.mcpErr != nil {
-		return "", fmt.Errorf("agent: MCP connect: %w", a.mcpErr)
+		return "", core.Usage{}, fmt.Errorf("agent: MCP connect: %w", a.mcpErr)
 	}
 
 	// Load history from memory
 	history, err := a.loadHistory(ctx, sessionID)
 	if err != nil {
-		return "", fmt.Errorf("agent: load history: %w", err)
+		return "", core.Usage{}, fmt.Errorf("agent: load history: %w", err)
 	}
 
 	// Append user message
@@ -111,7 +124,7 @@ func (a *Agent) Run(ctx context.Context, sessionID, userMessage string) (string,
 	// Save user message to memory
 	if a.cfg.memory != nil {
 		if err := a.cfg.memory.Append(ctx, sessionID, userMsg); err != nil {
-			return "", fmt.Errorf("agent: save user message: %w", err)
+			return "", core.Usage{}, fmt.Errorf("agent: save user message: %w", err)
 		}
 	}
 
@@ -139,7 +152,7 @@ func (a *Agent) Run(ctx context.Context, sessionID, userMessage string) (string,
 
 		resp, err := a.cfg.provider.Chat(ctx, req)
 		if err != nil {
-			return "", fmt.Errorf("agent: provider error: %w", err)
+			return "", core.Usage{}, fmt.Errorf("agent: provider error: %w", err)
 		}
 
 		totalUsage.InputTokens += resp.Usage.InputTokens
@@ -149,7 +162,7 @@ func (a *Agent) Run(ctx context.Context, sessionID, userMessage string) (string,
 		history = append(history, resp.Message)
 		if a.cfg.memory != nil {
 			if err := a.cfg.memory.Append(ctx, sessionID, resp.Message); err != nil {
-				return "", fmt.Errorf("agent: save assistant message: %w", err)
+				return "", core.Usage{}, fmt.Errorf("agent: save assistant message: %w", err)
 			}
 		}
 
@@ -162,12 +175,12 @@ func (a *Agent) Run(ctx context.Context, sessionID, userMessage string) (string,
 				slog.Int("output_tokens", totalUsage.OutputTokens),
 				slog.Int("iterations", i+1),
 			)
-			return resp.Message.Content, nil
+			return resp.Message.Content, totalUsage, nil
 
 		case core.StopReasonToolUse:
 			if len(resp.Message.ToolCalls) == 0 {
 				// Malformed response — treat as done
-				return resp.Message.Content, nil
+				return resp.Message.Content, totalUsage, nil
 			}
 
 			a.cfg.logger.DebugContext(ctx, "agent: dispatching tools",
@@ -176,26 +189,26 @@ func (a *Agent) Run(ctx context.Context, sessionID, userMessage string) (string,
 
 			toolMsgs, err := a.dispatchTools(ctx, resp.Message.ToolCalls)
 			if err != nil {
-				return "", err // only context cancellation propagates as hard error
+				return "", core.Usage{}, err // only context cancellation propagates as hard error
 			}
 
 			history = append(history, toolMsgs...)
 			if a.cfg.memory != nil {
 				if err := a.cfg.memory.Append(ctx, sessionID, toolMsgs...); err != nil {
-					return "", fmt.Errorf("agent: save tool messages: %w", err)
+					return "", core.Usage{}, fmt.Errorf("agent: save tool messages: %w", err)
 				}
 			}
 
 		default:
 			// Unknown stop reason — treat as done
-			return resp.Message.Content, nil
+			return resp.Message.Content, totalUsage, nil
 		}
 	}
 
 	a.cfg.logger.WarnContext(ctx, "agent: max iterations reached",
 		slog.Int("max", a.cfg.maxIterations),
 	)
-	return "", core.ErrMaxIterations
+	return "", core.Usage{}, core.ErrMaxIterations
 }
 
 // RunStream executes the agent loop and streams events.
@@ -229,6 +242,7 @@ func (a *Agent) RunStream(ctx context.Context, sessionID, userMessage string) <-
 		}
 
 		toolDefs := a.buildToolDefs()
+		var totalUsage core.Usage
 
 		for i := 0; i < a.cfg.maxIterations; i++ {
 			req := core.ChatRequest{
@@ -281,7 +295,8 @@ func (a *Agent) RunStream(ctx context.Context, sessionID, userMessage string) <-
 				ToolCalls: toolCalls,
 			}
 			history = append(history, assistantMsg)
-			_ = usage // usage tracked per iteration
+			totalUsage.InputTokens += usage.InputTokens
+			totalUsage.OutputTokens += usage.OutputTokens
 			if a.cfg.memory != nil {
 				_ = a.cfg.memory.Append(ctx, sessionID, assistantMsg)
 			}
@@ -290,6 +305,7 @@ func (a *Agent) RunStream(ctx context.Context, sessionID, userMessage string) <-
 				ch <- core.StreamEvent{
 					Type:       core.StreamEventDone,
 					StopReason: stopReason,
+					Usage:      &totalUsage,
 				}
 				return
 			}

@@ -9,6 +9,7 @@ import (
 	"github.com/lioarce01/chainforge/pkg/middleware/logging"
 	cfotel "github.com/lioarce01/chainforge/pkg/middleware/otel"
 	"github.com/lioarce01/chainforge/pkg/middleware/retry"
+	"github.com/lioarce01/chainforge/pkg/providers/gemini"
 )
 
 // agentConfig holds all configuration for an Agent.
@@ -25,7 +26,8 @@ type agentConfig struct {
 	logger           *slog.Logger
 	mcpServers       []mcppkg.ServerConfig
 	providerWrappers []func(core.Provider) core.Provider
-	maxHistory       int // 0 = unlimited
+	maxHistory       int           // 0 = unlimited
+	runTimeout       time.Duration // 0 = no timeout
 }
 
 func defaultConfig() agentConfig {
@@ -130,12 +132,34 @@ func WithRetry(maxAttempts int) AgentOption {
 	}
 }
 
+// WithRunTimeout sets a per-run deadline. If the agent loop does not complete
+// within d, Run and RunWithUsage return context.DeadlineExceeded.
+// 0 (default) means no timeout.
+func WithRunTimeout(d time.Duration) AgentOption {
+	return func(c *agentConfig) { c.runTimeout = d }
+}
+
 // WithMaxHistory limits how many messages are loaded from memory on each Run call.
 // Only the most recent n messages are used; older messages are dropped for that turn.
 // This prevents context window overflow on long-running sessions.
 // 0 (default) means unlimited — all history is loaded.
 func WithMaxHistory(n int) AgentOption {
 	return func(c *agentConfig) { c.maxHistory = n }
+}
+
+// WithGemini configures the agent to use a Google Gemini provider.
+// apiKey is your Gemini API key; model is the model name (e.g. "gemini-2.0-flash").
+// If provider creation fails, the error is silently swallowed and NewAgent will
+// return an error because provider will be nil.
+func WithGemini(apiKey, model string) AgentOption {
+	return func(c *agentConfig) {
+		p, err := gemini.New(apiKey, model)
+		if err != nil {
+			return
+		}
+		c.provider = p
+		c.model = model
+	}
 }
 
 // WithTracing wraps the provider with OpenTelemetry tracing.
