@@ -5,6 +5,17 @@ description: Persist conversation history across Run calls.
 
 Memory lets an agent remember previous turns within a session. Without memory, each `Run` call starts with a clean context.
 
+## Built-in stores
+
+| Store | Package | Infrastructure | Best for |
+|---|---|---|---|
+| In-memory | `pkg/memory/inmemory` | None | Testing, single-process |
+| SQLite | `pkg/memory/sqlite` | None (pure Go) | Dev, embedded, zero-dep |
+| PostgreSQL | `pkg/memory/postgres` | Postgres server | Production SQL |
+| Redis | `pkg/memory/redis` | Redis server | Fast sessions, TTL |
+
+All stores implement `core.MemoryStore` and plug in identically via `chainforge.WithMemory(store)`.
+
 ## In-memory store
 
 ```go
@@ -24,9 +35,77 @@ agent.Run(ctx, "session-1", "What is my name?")
 
 Sessions are namespaced by `sessionID`. Different IDs are fully isolated.
 
+## SQLite store
+
+Zero infrastructure required — pure Go, no cgo.
+
+```go
+import "github.com/lioarce01/chainforge/pkg/memory/sqlite"
+
+// In-process database (great for tests / dev)
+store, err := sqlite.NewInMemory()
+
+// File-based (persists across restarts)
+store, err := sqlite.New("./data/chat.db")
+store, err := sqlite.New("./data/chat.db",
+    sqlite.WithTableName("my_messages"),
+    sqlite.WithBusyTimeout(10*time.Second),
+)
+defer store.Close()
+
+agent, err := chainforge.NewAgent(
+    chainforge.WithMemory(store),
+    // ...
+)
+```
+
+## PostgreSQL store
+
+```go
+import "github.com/lioarce01/chainforge/pkg/memory/postgres"
+
+store, err := postgres.New(os.Getenv("DATABASE_URL"))
+store, err := postgres.New(os.Getenv("DATABASE_URL"),
+    postgres.WithSchemaName("myapp"),
+    postgres.WithTableName("chat_history"),
+    postgres.WithMaxConns(20),
+)
+defer store.Close()
+
+agent, err := chainforge.NewAgent(
+    chainforge.WithMemory(store),
+    // ...
+)
+```
+
+The schema is auto-migrated on first use. Identifiers are safely quoted via `pgx.Identifier`.
+
+## Redis store
+
+```go
+import "github.com/lioarce01/chainforge/pkg/memory/redis"
+
+// By address
+store, err := redis.New("localhost:6379")
+
+// By URL (supports redis:// and rediss://)
+store, err := redis.NewFromURL(os.Getenv("REDIS_URL"),
+    redis.WithTTL(24*time.Hour), // sliding-window expiry
+    redis.WithKeyPrefix("myapp"),
+)
+defer store.Close()
+
+agent, err := chainforge.NewAgent(
+    chainforge.WithMemory(store),
+    // ...
+)
+```
+
+Redis stores messages in a List per session (`{prefix}:{sessionID}`). TTL is reset on every `Append` (sliding window).
+
 ## Custom store
 
-Implement `core.MemoryStore` to back memory with Redis, Postgres, or any store:
+Implement `core.MemoryStore` to use any other backend:
 
 ```go
 type MemoryStore interface {
