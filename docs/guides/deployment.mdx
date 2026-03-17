@@ -3,8 +3,49 @@ title: "Deployment"
 description: "Running chainforge as a production HTTP service"
 ---
 
-chainforge ships a production-ready HTTP server binary. This guide covers
-Docker, docker-compose, Kubernetes, and Helm deployment.
+chainforge ships a production-ready HTTP server binary and a one-line
+embedding API for library users. This guide covers both.
+
+## Embedding the server (library usage)
+
+The fastest way to serve an agent over HTTP is `chainforge.Serve`:
+
+```go
+agent, _ := chainforge.NewAgent(
+    chainforge.WithProvider(anthropic.New(os.Getenv("ANTHROPIC_API_KEY"))),
+    chainforge.WithModel("claude-sonnet-4-6"),
+    chainforge.WithLogging(slog.Default()),
+)
+log.Fatal(chainforge.Serve(":8080", agent))
+```
+
+`Serve` blocks until `SIGINT` or `SIGTERM`, then performs a 30-second graceful
+shutdown and calls `agent.Close()`. No other setup required.
+
+### Custom lifecycle
+
+For applications that manage their own signal handling, use `ServeContext`:
+
+```go
+ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+defer stop()
+
+if err := chainforge.ServeContext(ctx, ":8080", agent); err != nil {
+    log.Fatal(err)
+}
+```
+
+### Endpoints exposed by `Serve` / `ServeContext`
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/v1/chat` | Synchronous chat |
+| `POST` | `/v1/chat/stream` | Streaming chat via SSE |
+| `GET` | `/healthz` | Liveness probe |
+
+For `/readyz`, `/v1/info`, custom CORS origins, or TLS — use `pkg/server` directly.
+
+---
 
 ## HTTP API
 

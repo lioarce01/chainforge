@@ -5,20 +5,41 @@ description: "Structured logging and OpenTelemetry tracing for chainforge"
 
 chainforge provides two observability layers: **structured logging** (stdlib
 `log/slog`, zero deps) and **OpenTelemetry tracing** (OTLP gRPC export).
-Both are opt-in wrappers — `pkg/core` remains dependency-free.
+Both are opt-in — `pkg/core` remains dependency-free.
 
-## Logging middleware
+## Quick setup (agent options)
 
-`pkg/middleware/logging` wraps `core.Provider` and `core.MemoryStore` with
-slog events. No configuration required beyond a logger.
+The simplest way to enable observability is via agent options. No extra imports needed:
 
 ```go
 import (
     "log/slog"
-    "github.com/lioarce01/chainforge/pkg/middleware/logging"
+    chainforge "github.com/lioarce01/chainforge"
+    cfgotel "github.com/lioarce01/chainforge/pkg/middleware/otel"
 )
 
-logger := slog.Default()
+// Optional: initialise a real tracer provider before NewAgent.
+tp, shutdown, _ := cfgotel.InitTracerProvider(ctx, "localhost:4317", "my-service", "1.0.0")
+defer shutdown(ctx)
+
+agent, _ := chainforge.NewAgent(
+    chainforge.WithProvider(p),
+    chainforge.WithModel("claude-sonnet-4-6"),
+    chainforge.WithLogging(slog.Default()),  // structured logs per call
+    chainforge.WithTracing(),                // OTel spans per call
+)
+```
+
+- `WithLogging` and `WithTracing` wrap the provider transparently — no changes to how you call `Run` or `RunStream`.
+- `WithTracing()` uses the global OTel tracer. If `InitTracerProvider` was not called, a noop tracer is used silently.
+- Both options can be stacked in any order. Recommended: `WithLogging` before `WithTracing` so log events nest inside the span.
+
+## Logging middleware (advanced)
+
+For finer-grained control — or to wrap a memory store — use `pkg/middleware/logging` directly:
+
+```go
+import "github.com/lioarce01/chainforge/pkg/middleware/logging"
 
 // Wrap provider — emits debug/info/error events per call.
 loggedProvider := logging.NewLoggedProvider(rawProvider, logger)
@@ -99,7 +120,7 @@ agent, _ := chainforge.NewAgent(
 not after the channel is opened. This captures true end-to-end streaming
 latency including tool dispatch time.
 
-### Composing logging + tracing
+### Composing logging + tracing (advanced)
 
 ```go
 rawProvider    := anthropicProvider
@@ -108,6 +129,13 @@ tracedProvider := otel.NewTracedProvider(loggedProvider, tracer)
 
 // tracedProvider → loggedProvider → rawProvider
 // Both wrappers are active; order determines span/log nesting.
+```
+
+Or equivalently via options (recommended):
+
+```go
+chainforge.WithLogging(logger),  // logging wraps rawProvider
+chainforge.WithTracing(),        // tracing wraps the logged provider
 ```
 
 ## Server logs

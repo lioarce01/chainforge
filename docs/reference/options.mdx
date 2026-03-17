@@ -40,7 +40,20 @@ All options are passed to `chainforge.NewAgent(...)` as functional options.
 
 | Option | Default | Description |
 |---|---|---|
-| `WithLogger(l)` | `slog.Default()` | Structured `slog.Logger`. |
+| `WithLogger(l)` | `slog.Default()` | Structured `slog.Logger` for the agent loop. |
+| `WithLogging(logger)` | — | Wraps the provider with slog middleware. Logs every Chat/ChatStream call with latency and token counts. Falls back to `slog.Default()` if logger is nil. |
+| `WithTracing()` | — | Wraps the provider with OpenTelemetry spans. Uses the global tracer — call `otel.InitTracerProvider` first. No-op if the global tracer is uninitialised. |
+
+Both `WithLogging` and `WithTracing` are applied after all other options are resolved, so their position relative to `WithProvider` does not matter. They can be stacked:
+
+```go
+chainforge.NewAgent(
+    chainforge.WithProvider(p),
+    chainforge.WithModel("claude-sonnet-4-6"),
+    chainforge.WithLogging(logger),  // wraps provider first
+    chainforge.WithTracing(),        // wraps the logged provider
+)
+```
 
 ## Errors
 

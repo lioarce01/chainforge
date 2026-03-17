@@ -28,6 +28,9 @@ func NewAgent(opts ...AgentOption) (*Agent, error) {
 	if err := validateConfig(cfg); err != nil {
 		return nil, err
 	}
+	for _, wrap := range cfg.providerWrappers {
+		cfg.provider = wrap(cfg.provider)
+	}
 	return newAgent(cfg), nil
 }
 

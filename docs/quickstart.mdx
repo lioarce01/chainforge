@@ -70,6 +70,28 @@ provider := openai.NewWithBaseURL(
 )
 ```
 
+## 4. Serve over HTTP
+
+Turn any agent into an HTTP service with one line:
+
+```go
+log.Fatal(chainforge.Serve(":8080", agent))
+```
+
+This exposes `POST /v1/chat`, `POST /v1/chat/stream` (SSE), and `GET /healthz`.
+It blocks until `SIGINT`/`SIGTERM` and shuts down gracefully.
+
+## 5. Add logging and tracing
+
+```go
+agent, _ := chainforge.NewAgent(
+    chainforge.WithProvider(openai.New(os.Getenv("OPENAI_API_KEY"))),
+    chainforge.WithModel("gpt-4o-mini"),
+    chainforge.WithLogging(slog.Default()),  // logs every LLM call
+    chainforge.WithTracing(),                // OTel spans (noop if not configured)
+)
+```
+
 ## Next steps
 
 <CardGroup cols={2}>
@@ -84,5 +106,11 @@ provider := openai.NewWithBaseURL(
   </Card>
   <Card title="Orchestration" icon="diagram-project" href="/guides/orchestration">
     Sequential pipelines and parallel fan-out.
+  </Card>
+  <Card title="Observability" icon="chart-line" href="/guides/observability">
+    Structured logging and OpenTelemetry tracing.
+  </Card>
+  <Card title="Deployment" icon="rocket" href="/guides/deployment">
+    Docker, Kubernetes, Helm, and embedding the HTTP server.
   </Card>
 </CardGroup>

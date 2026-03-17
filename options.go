@@ -6,21 +6,24 @@ import (
 
 	"github.com/lioarce01/chainforge/pkg/core"
 	mcppkg "github.com/lioarce01/chainforge/pkg/mcp"
+	"github.com/lioarce01/chainforge/pkg/middleware/logging"
+	cfotel "github.com/lioarce01/chainforge/pkg/middleware/otel"
 )
 
 // agentConfig holds all configuration for an Agent.
 type agentConfig struct {
-	provider      core.Provider
-	model         string
-	systemPrompt  string
-	tools         []core.Tool
-	memory        core.MemoryStore
-	maxIterations int
-	toolTimeout   time.Duration
-	maxTokens     int
-	temperature   float64
-	logger        *slog.Logger
-	mcpServers    []mcppkg.ServerConfig
+	provider         core.Provider
+	model            string
+	systemPrompt     string
+	tools            []core.Tool
+	memory           core.MemoryStore
+	maxIterations    int
+	toolTimeout      time.Duration
+	maxTokens        int
+	temperature      float64
+	logger           *slog.Logger
+	mcpServers       []mcppkg.ServerConfig
+	providerWrappers []func(core.Provider) core.Provider
 }
 
 func defaultConfig() agentConfig {
@@ -98,4 +101,28 @@ func WithMCPServer(s mcppkg.ServerConfig) AgentOption {
 // WithMCPServers registers multiple MCP servers at once.
 func WithMCPServers(servers ...mcppkg.ServerConfig) AgentOption {
 	return func(c *agentConfig) { c.mcpServers = append(c.mcpServers, servers...) }
+}
+
+// WithLogging wraps the provider with structured slog logging.
+// Every Chat and ChatStream call is logged with latency, token counts, and errors.
+// If logger is nil, slog.Default() is used.
+// Applied after all options are resolved, so order relative to WithProvider does not matter.
+func WithLogging(logger *slog.Logger) AgentOption {
+	return func(c *agentConfig) {
+		c.providerWrappers = append(c.providerWrappers, func(p core.Provider) core.Provider {
+			return logging.NewLoggedProvider(p, logger)
+		})
+	}
+}
+
+// WithTracing wraps the provider with OpenTelemetry tracing.
+// Each Chat call becomes a span; ChatStream spans cover the full stream duration.
+// If InitTracerProvider has not been called, the global noop tracer is used — no error.
+// Applied after all options are resolved, so order relative to WithProvider does not matter.
+func WithTracing() AgentOption {
+	return func(c *agentConfig) {
+		c.providerWrappers = append(c.providerWrappers, func(p core.Provider) core.Provider {
+			return cfotel.NewTracedProvider(p, cfotel.Tracer())
+		})
+	}
 }
