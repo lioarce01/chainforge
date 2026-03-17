@@ -87,13 +87,17 @@ func (r *Provider) ChatStream(ctx context.Context, req core.ChatRequest) (<-chan
 }
 
 // wait sleeps for the backoff duration or until ctx is cancelled.
+// Uses time.NewTimer (with explicit Stop) instead of time.After to avoid
+// leaking the timer goroutine when the context is cancelled before the delay fires.
 func (r *Provider) wait(ctx context.Context, attempt int) error {
 	delay := time.Duration(float64(r.baseDelay) * math.Pow(2, float64(attempt-1)))
 	if delay > r.maxDelay {
 		delay = r.maxDelay
 	}
+	t := time.NewTimer(delay)
+	defer t.Stop()
 	select {
-	case <-time.After(delay):
+	case <-t.C:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()

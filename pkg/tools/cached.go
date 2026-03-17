@@ -17,10 +17,10 @@ type cacheEntry struct {
 
 // CachedTool wraps a core.Tool and memoizes Call results by input JSON string.
 // Errors are also cached to avoid repeated calls on bad input.
-// Safe for concurrent use.
+// Safe for concurrent use; read-heavy workloads benefit from the RWMutex fast path.
 type CachedTool struct {
 	inner core.Tool
-	mu    sync.Mutex
+	mu    sync.RWMutex
 	cache map[string]cacheEntry
 }
 
@@ -39,12 +39,20 @@ func (c *CachedTool) Definition() core.ToolDefinition {
 
 // Call returns the cached result for input if available; otherwise calls the
 // inner tool, caches the result, and returns it.
-// The lock is held for the duration of the inner call to ensure exactly-once
-// semantics when concurrent goroutines call with the same input.
+// Uses a double-check pattern: read lock for the common cache-hit path,
+// write lock only on a miss to ensure exactly-once inner invocation.
 func (c *CachedTool) Call(ctx context.Context, input string) (string, error) {
+	// Fast path: read lock — no blocking for concurrent cache hits.
+	c.mu.RLock()
+	if e, ok := c.cache[input]; ok {
+		c.mu.RUnlock()
+		return e.result, e.err
+	}
+	c.mu.RUnlock()
+
+	// Miss: acquire write lock and double-check before calling inner.
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
 	if e, ok := c.cache[input]; ok {
 		return e.result, e.err
 	}

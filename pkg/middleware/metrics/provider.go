@@ -93,7 +93,7 @@ func (m *Provider) ChatStream(ctx context.Context, req core.ChatRequest) (<-chan
 		return nil, err
 	}
 
-	out := make(chan core.StreamEvent, cap(inner))
+	out := make(chan core.StreamEvent, max(cap(inner), 16))
 	go func() {
 		defer close(out)
 		var totalUsage core.Usage

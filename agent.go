@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 type Agent struct {
 	cfg        agentConfig
 	toolMap    map[string]core.Tool
+	toolDefs   []core.ToolDefinition // cached; rebuilt after MCP connect
 	mcpClients []*mcppkg.Client
 	mcpOnce    sync.Once
 	mcpErr     error
@@ -31,7 +34,9 @@ func newAgent(cfg agentConfig) *Agent {
 	for i, s := range cfg.mcpServers {
 		clients[i] = mcppkg.NewClient(s, cfg.logger)
 	}
-	return &Agent{cfg: cfg, toolMap: tm, mcpClients: clients}
+	a := &Agent{cfg: cfg, toolMap: tm, mcpClients: clients}
+	a.toolDefs = a.buildToolDefs()
+	return a
 }
 
 // connectMCP connects all configured MCP servers in parallel and merges their
@@ -73,6 +78,8 @@ func (a *Agent) connectMCP(ctx context.Context) error {
 			a.toolMap[name] = t
 		}
 	}
+	// Rebuild cached tool definitions after MCP tools are merged in.
+	a.toolDefs = a.buildToolDefs()
 	return errors.Join(errs...)
 }
 
@@ -128,14 +135,15 @@ func (a *Agent) RunWithUsage(ctx context.Context, sessionID, userMessage string)
 		}
 	}
 
-	toolDefs := a.buildToolDefs()
+	// Prepend system message once — it will stay at history[0] throughout.
+	history = a.prependSystem(history)
 	var totalUsage core.Usage
 
 	for i := 0; i < a.cfg.maxIterations; i++ {
 		req := core.ChatRequest{
 			Model:    a.cfg.model,
-			Messages: a.prependSystem(history),
-			Tools:    toolDefs,
+			Messages: history,
+			Tools:    a.toolDefs,
 			Options: core.ChatOptions{
 				MaxTokens:    a.cfg.maxTokens,
 				Temperature:  a.cfg.temperature,
@@ -241,14 +249,15 @@ func (a *Agent) RunStream(ctx context.Context, sessionID, userMessage string) <-
 			_ = a.cfg.memory.Append(ctx, sessionID, userMsg)
 		}
 
-		toolDefs := a.buildToolDefs()
+		// Prepend system message once — it will stay at history[0] throughout.
+		history = a.prependSystem(history)
 		var totalUsage core.Usage
 
 		for i := 0; i < a.cfg.maxIterations; i++ {
 			req := core.ChatRequest{
 				Model:    a.cfg.model,
-				Messages: a.prependSystem(history),
-				Tools:    toolDefs,
+				Messages: history,
+				Tools:    a.toolDefs,
 				Options: core.ChatOptions{
 					MaxTokens:    a.cfg.maxTokens,
 					Temperature:  a.cfg.temperature,
@@ -263,16 +272,16 @@ func (a *Agent) RunStream(ctx context.Context, sessionID, userMessage string) <-
 			}
 
 			var (
-				textContent string
-				toolCalls   []core.ToolCall
-				stopReason  core.StopReason
-				usage       core.Usage
+				sb         strings.Builder
+				toolCalls  []core.ToolCall
+				stopReason core.StopReason
+				usage      core.Usage
 			)
 
 			for event := range stream {
 				switch event.Type {
 				case core.StreamEventText:
-					textContent += event.TextDelta
+					sb.WriteString(event.TextDelta)
 					ch <- event
 				case core.StreamEventToolCall:
 					if event.ToolCall != nil {
@@ -291,7 +300,7 @@ func (a *Agent) RunStream(ctx context.Context, sessionID, userMessage string) <-
 
 			assistantMsg := core.Message{
 				Role:      core.RoleAssistant,
-				Content:   textContent,
+				Content:   sb.String(),
 				ToolCalls: toolCalls,
 			}
 			history = append(history, assistantMsg)
@@ -335,6 +344,32 @@ type toolResult struct {
 // Tool execution errors are returned as tool result messages (non-fatal).
 // Context cancellation is the only hard failure.
 func (a *Agent) dispatchTools(ctx context.Context, toolCalls []core.ToolCall) ([]core.Message, error) {
+	// Fast path: skip goroutine/channel/WaitGroup overhead for a single tool call.
+	if len(toolCalls) == 1 {
+		tc := toolCalls[0]
+		toolCtx, cancel := context.WithTimeout(ctx, a.cfg.toolTimeout)
+		defer cancel()
+
+		output, err := a.callTool(toolCtx, tc)
+		msg := core.Message{
+			Role:       core.RoleTool,
+			Content:    output,
+			ToolCallID: tc.ID,
+			Name:       tc.Name,
+		}
+		if err != nil {
+			a.cfg.logger.WarnContext(ctx, "agent: tool error",
+				slog.String("tool", tc.Name),
+				slog.String("error", err.Error()),
+			)
+			msg.Content = fmt.Sprintf("error: %v", err)
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return []core.Message{msg}, nil
+	}
+
 	results := make(chan toolResult, len(toolCalls))
 	var wg sync.WaitGroup
 
@@ -438,6 +473,7 @@ func (a *Agent) prependSystem(history []core.Message) []core.Message {
 }
 
 // buildToolDefs extracts ToolDefinition from all registered tools (static + MCP).
+// Results are sorted by name for deterministic LLM prompt ordering.
 func (a *Agent) buildToolDefs() []core.ToolDefinition {
 	if len(a.toolMap) == 0 {
 		return nil
@@ -446,6 +482,9 @@ func (a *Agent) buildToolDefs() []core.ToolDefinition {
 	for _, t := range a.toolMap {
 		defs = append(defs, t.Definition())
 	}
+	sort.Slice(defs, func(i, j int) bool {
+		return defs[i].Name < defs[j].Name
+	})
 	return defs
 }
 
