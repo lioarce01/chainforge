@@ -2,6 +2,8 @@
 
 A provider-agnostic Go agent orchestration framework. Import it as a library to build AI applications without touching any LLM SDK directly.
 
+[![Documentation](https://img.shields.io/badge/docs-chainforge.mintlify.app-6366F1?style=flat&logo=gitbook&logoColor=white)](https://chainforge.mintlify.app)
+
 ```go
 agent, err := chainforge.NewAgent(
     chainforge.WithProvider(anthropic.New(os.Getenv("ANTHROPIC_API_KEY"))),
