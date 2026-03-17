@@ -23,6 +23,30 @@ The Qdrant gRPC client (`github.com/qdrant/go-client`) is pulled in automaticall
 
 ---
 
+## Quick constructors
+
+Two one-call constructors handle the most common configurations:
+
+```go
+// OpenAI embeddings + any Qdrant instance
+store, err := qdrantmem.NewWithOpenAI(
+    "localhost:6334",                    // Qdrant URL
+    "",                                  // Qdrant API key (empty for local)
+    os.Getenv("OPENAI_API_KEY"),         // OpenAI API key
+    qdrantmem.WithCollectionName("chat"), // optional extras
+)
+
+// Ollama embeddings + any Qdrant instance
+store, err := qdrantmem.NewWithOllama(
+    "localhost:6334",          // Qdrant URL
+    "http://localhost:11434",  // Ollama base URL
+    "nomic-embed-text",        // model name
+    768,                       // embedding dimensions
+)
+```
+
+Both accept optional `...Option` arguments (e.g. `WithCollectionName`, `WithTopK`) applied after the defaults.
+
 ## Quick start
 
 ```go
