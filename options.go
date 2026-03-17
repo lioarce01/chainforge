@@ -8,6 +8,7 @@ import (
 	mcppkg "github.com/lioarce01/chainforge/pkg/mcp"
 	"github.com/lioarce01/chainforge/pkg/middleware/logging"
 	cfotel "github.com/lioarce01/chainforge/pkg/middleware/otel"
+	"github.com/lioarce01/chainforge/pkg/middleware/retry"
 )
 
 // agentConfig holds all configuration for an Agent.
@@ -24,6 +25,7 @@ type agentConfig struct {
 	logger           *slog.Logger
 	mcpServers       []mcppkg.ServerConfig
 	providerWrappers []func(core.Provider) core.Provider
+	maxHistory       int // 0 = unlimited
 }
 
 func defaultConfig() agentConfig {
@@ -113,6 +115,27 @@ func WithLogging(logger *slog.Logger) AgentOption {
 			return logging.NewLoggedProvider(p, logger)
 		})
 	}
+}
+
+// WithRetry wraps the provider with automatic retry on transient errors.
+// maxAttempts is the total number of attempts (1 = no retry, 3 = 1 attempt + 2 retries).
+// Uses exponential backoff: 200ms, 400ms, 800ms … capped at 10s.
+// Context cancellation and deadline errors are never retried.
+// Applied after all options are resolved, so order relative to WithProvider does not matter.
+func WithRetry(maxAttempts int) AgentOption {
+	return func(c *agentConfig) {
+		c.providerWrappers = append(c.providerWrappers, func(p core.Provider) core.Provider {
+			return retry.New(p, maxAttempts)
+		})
+	}
+}
+
+// WithMaxHistory limits how many messages are loaded from memory on each Run call.
+// Only the most recent n messages are used; older messages are dropped for that turn.
+// This prevents context window overflow on long-running sessions.
+// 0 (default) means unlimited — all history is loaded.
+func WithMaxHistory(n int) AgentOption {
+	return func(c *agentConfig) { c.maxHistory = n }
 }
 
 // WithTracing wraps the provider with OpenTelemetry tracing.

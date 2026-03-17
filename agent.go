@@ -393,11 +393,19 @@ func (a *Agent) callTool(ctx context.Context, tc core.ToolCall) (string, error) 
 }
 
 // loadHistory fetches history from memory (returns nil if no memory store).
+// If WithMaxHistory is set, only the most recent n messages are returned.
 func (a *Agent) loadHistory(ctx context.Context, sessionID string) ([]core.Message, error) {
 	if a.cfg.memory == nil {
 		return nil, nil
 	}
-	return a.cfg.memory.Get(ctx, sessionID)
+	msgs, err := a.cfg.memory.Get(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if a.cfg.maxHistory > 0 && len(msgs) > a.cfg.maxHistory {
+		msgs = msgs[len(msgs)-a.cfg.maxHistory:]
+	}
+	return msgs, nil
 }
 
 // prependSystem ensures the system prompt is the first message if configured.
