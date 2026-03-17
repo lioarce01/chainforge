@@ -1,0 +1,91 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chainforge
+  namespace: chainforge
+  labels:
+    app.kubernetes.io/name: chainforge
+    app.kubernetes.io/version: "0.3.0"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: chainforge
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: chainforge
+        app.kubernetes.io/version: "0.3.0"
+      annotations:
+        prometheus.io/scrape: "false"  # enable when Prometheus adapter is added
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+
+      containers:
+        - name: chainforge
+          image: chainforge:0.3.0
+          imagePullPolicy: IfNotPresent
+          args: ["--config", "/etc/chainforge/config.yaml"]
+
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+
+          env:
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: chainforge-secrets
+                  key: ANTHROPIC_API_KEY
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: chainforge-secrets
+                  key: OPENAI_API_KEY
+
+          volumeMounts:
+            - name: config
+              mountPath: /etc/chainforge
+              readOnly: true
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "64Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            failureThreshold: 3
+
+      volumes:
+        - name: config
+          configMap:
+            name: chainforge-config
+
+      terminationGracePeriodSeconds: 30

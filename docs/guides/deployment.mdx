@@ -1,0 +1,169 @@
+---
+title: "Deployment"
+description: "Running chainforge as a production HTTP service"
+---
+
+chainforge ships a production-ready HTTP server binary. This guide covers
+Docker, docker-compose, Kubernetes, and Helm deployment.
+
+## HTTP API
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/v1/chat` | Synchronous chat — waits for full response |
+| `POST` | `/v1/chat/stream` | Streaming chat via SSE |
+| `GET` | `/healthz` | Liveness probe |
+| `GET` | `/readyz` | Readiness probe |
+| `GET` | `/v1/info` | Provider/model metadata |
+
+### Request format
+
+```json
+{ "session_id": "user-123", "message": "Hello!" }
+```
+
+### Synchronous response
+
+```json
+{
+  "message": { "role": "assistant", "content": "Hello! How can I help?" },
+  "usage": { "input_tokens": 12, "output_tokens": 9 }
+}
+```
+
+### Streaming (SSE)
+
+```
+event: text
+data: {"delta":"Hello"}
+
+event: text
+data: {"delta":"! How can I help?"}
+
+event: done
+data: {"stop_reason":"end_turn"}
+```
+
+## Configuration
+
+Configuration is loaded from a YAML file with environment variable overrides.
+**API keys are env-only** — they cannot appear in YAML files.
+
+```yaml
+# config.example.yaml
+host: "0.0.0.0"
+port: 8080
+provider:
+  name: "anthropic"    # "anthropic" | "openai" | "ollama"
+model: "claude-sonnet-4-6"
+log_level: "info"
+log_format: "json"
+otel_enabled: false
+otel_endpoint: "localhost:4317"
+```
+
+```bash
+# API keys via environment only
+ANTHROPIC_API_KEY=sk-ant-... chainforge-server --config config.yaml
+```
+
+## Docker
+
+```bash
+# Build
+docker build -t chainforge:latest -f deploy/Dockerfile .
+
+# Run
+docker run --rm \
+  -p 8080:8080 \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  -v $(pwd)/config.example.yaml:/config.yaml:ro \
+  chainforge:latest --config /config.yaml
+```
+
+The image uses `distroless/static-debian12:nonroot` — no shell, uid 65532.
+
+## docker-compose
+
+Starts chainforge + Qdrant + OpenTelemetry Collector + Jaeger:
+
+```bash
+cd deploy/
+ANTHROPIC_API_KEY=sk-ant-... docker-compose up -d
+
+# View traces
+open http://localhost:16686   # Jaeger UI
+```
+
+## Kubernetes
+
+```bash
+# Apply all manifests
+kubectl apply -f deploy/k8s/namespace.yaml
+kubectl apply -f deploy/k8s/configmap.yaml
+
+# Inject secrets (never commit real values)
+kubectl create secret generic chainforge-secrets \
+  --namespace=chainforge \
+  --from-literal=ANTHROPIC_API_KEY=sk-ant-... \
+  --from-literal=OPENAI_API_KEY=
+
+kubectl apply -f deploy/k8s/deployment.yaml
+kubectl apply -f deploy/k8s/service.yaml
+kubectl apply -f deploy/k8s/hpa.yaml
+
+# Verify
+kubectl rollout status deployment/chainforge -n chainforge
+kubectl get pods -n chainforge
+```
+
+### Security posture
+
+The Deployment enforces:
+
+- `runAsNonRoot: true` — container cannot run as root
+- `readOnlyRootFilesystem: true` — no writes to container filesystem
+- `allowPrivilegeEscalation: false`
+- `capabilities.drop: ["ALL"]`
+
+### HPA
+
+The default HPA scales between 2 and 10 replicas at 50% CPU:
+
+```yaml
+minReplicas: 2
+maxReplicas: 10
+targetCPUUtilizationPercentage: 50
+```
+
+## Helm
+
+```bash
+helm lint deploy/helm/
+
+# Dry run
+helm template chainforge deploy/helm/ | kubectl apply --dry-run=client -f -
+
+# Install
+helm install chainforge deploy/helm/ \
+  --namespace chainforge --create-namespace \
+  --set secrets.anthropicApiKey=sk-ant-...
+
+# Upgrade
+helm upgrade chainforge deploy/helm/ \
+  --set image.tag=0.4.0
+
+# Uninstall (secrets are kept by helm.sh/resource-policy: keep)
+helm uninstall chainforge -n chainforge
+```
+
+### Key values
+
+| Value | Default | Description |
+|---|---|---|
+| `config.provider.name` | `anthropic` | Provider name |
+| `config.model` | `claude-sonnet-4-6` | Model identifier |
+| `config.otelEnabled` | `false` | Enable OTel tracing |
+| `hpa.enabled` | `true` | Enable horizontal pod autoscaler |
+| `secrets.anthropicApiKey` | `""` | **Set at install time, never in values.yaml** |
+| `ingress.enabled` | `false` | Enable ingress |

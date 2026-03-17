@@ -1,0 +1,22 @@
+# chainforge server configuration example
+# Copy to config.yaml (which is gitignored) and fill in values.
+# API keys must NEVER appear here — use environment variables instead.
+#
+#   ANTHROPIC_API_KEY=sk-ant-... chainforge-server --config config.yaml
+
+host: "0.0.0.0"
+port: 8080
+
+provider:
+  name: "anthropic"    # "anthropic" | "openai" | "ollama"
+  # base_url: ""       # for OpenAI-compatible providers (Ollama, LM Studio, etc.)
+
+model: "claude-sonnet-4-6"
+
+log_level: "info"    # "debug" | "info" | "warn" | "error"
+log_format: "json"   # "json" | "text"
+
+otel_enabled: false
+otel_endpoint: "localhost:4317"
+
+max_request_body_bytes: 1048576  # 1 MiB

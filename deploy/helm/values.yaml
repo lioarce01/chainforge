@@ -1,0 +1,86 @@
+# chainforge Helm chart values
+# All secrets must be provided at install time — NEVER commit real values.
+#
+#   helm install chainforge deploy/helm/ \
+#     --set secrets.anthropicApiKey=sk-ant-... \
+#     --namespace chainforge --create-namespace
+
+replicaCount: 2
+
+image:
+  repository: chainforge
+  tag: "0.3.0"
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: false
+  className: nginx
+  host: chainforge.example.com
+  tls: false
+  tlsSecretName: chainforge-tls
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+
+config:
+  host: "0.0.0.0"
+  port: 8080
+  provider:
+    name: "anthropic"    # "anthropic" | "openai" | "ollama"
+    baseUrl: ""          # for OpenAI-compatible providers
+  model: "claude-sonnet-4-6"
+  logLevel: "info"       # "debug" | "info" | "warn" | "error"
+  logFormat: "json"      # "json" | "text"
+  otelEnabled: false     # set true and provide otelEndpoint to enable tracing
+  otelEndpoint: "otel-collector:4317"
+  maxRequestBodyBytes: 1048576  # 1 MiB
+
+secrets:
+  anthropicApiKey: ""   # NEVER commit real keys — pass via --set at install time
+  openaiApiKey: ""      # NEVER commit real keys
+
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 50
+
+resources:
+  requests:
+    cpu: "100m"
+    memory: "64Mi"
+  limits:
+    cpu: "500m"
+    memory: "256Mi"
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: http
+  initialDelaySeconds: 3
+  periodSeconds: 5
+  failureThreshold: 3

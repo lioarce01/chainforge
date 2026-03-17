@@ -1,0 +1,32 @@
+# Ingress is disabled by default. Enable by removing the "disabled" annotation
+# or using Helm: --set ingress.enabled=true
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: chainforge
+  namespace: chainforge
+  labels:
+    app.kubernetes.io/name: chainforge
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"        # required for SSE
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"    # 1h for long streams
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    # cert-manager.io/cluster-issuer: letsencrypt-prod        # uncomment for TLS
+spec:
+  # ingressClassName: nginx
+  rules:
+    - host: chainforge.example.com   # change to your domain
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: chainforge
+                port:
+                  name: http
+  # tls:                             # uncomment for TLS
+  #   - hosts:
+  #       - chainforge.example.com
+  #     secretName: chainforge-tls

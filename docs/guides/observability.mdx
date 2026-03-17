@@ -1,0 +1,141 @@
+---
+title: "Observability"
+description: "Structured logging and OpenTelemetry tracing for chainforge"
+---
+
+chainforge provides two observability layers: **structured logging** (stdlib
+`log/slog`, zero deps) and **OpenTelemetry tracing** (OTLP gRPC export).
+Both are opt-in wrappers — `pkg/core` remains dependency-free.
+
+## Logging middleware
+
+`pkg/middleware/logging` wraps `core.Provider` and `core.MemoryStore` with
+slog events. No configuration required beyond a logger.
+
+```go
+import (
+    "log/slog"
+    "github.com/lioarce01/chainforge/pkg/middleware/logging"
+)
+
+logger := slog.Default()
+
+// Wrap provider — emits debug/info/error events per call.
+loggedProvider := logging.NewLoggedProvider(rawProvider, logger)
+
+// Wrap memory store.
+loggedMemory := logging.NewLoggedMemoryStore(rawStore, logger)
+
+agent, _ := chainforge.NewAgent(
+    chainforge.WithProvider(loggedProvider),
+    chainforge.WithMemory(loggedMemory),
+)
+```
+
+### Log events emitted
+
+| Event | Level | Fields |
+|---|---|---|
+| `provider.Chat: start` | Debug | provider, model, messages |
+| `provider.Chat: done` | Info | provider, model, duration, stop_reason, input_tokens, output_tokens |
+| `provider.Chat: error` | Error | provider, model, duration, error |
+| `provider.ChatStream: start` | Debug | provider, model, messages |
+| `provider.ChatStream: done` | Info | provider, model, duration, stop_reason, text_bytes |
+| `provider.ChatStream: stream error` | Error | provider, duration, error |
+| `memory.Get: done` | Debug | session, messages, duration |
+| `memory.Append: done` | Debug | session, count, duration |
+| `memory.Clear: done` | Info | session, duration |
+
+## OpenTelemetry tracing
+
+`pkg/middleware/otel` wraps providers and memory with OTel spans. Requires
+an OTLP-compatible backend (Jaeger, Grafana Tempo, Honeycomb, etc.).
+
+### Setup
+
+```go
+import (
+    "go.opentelemetry.io/otel/trace/noop"
+    cfgotel "github.com/lioarce01/chainforge/pkg/middleware/otel"
+)
+
+// In production: initialise a real tracer provider.
+tp, shutdown, err := cfgotel.InitTracerProvider(
+    ctx,
+    "localhost:4317",   // OTLP gRPC endpoint
+    "my-service",
+    "1.0.0",
+)
+defer shutdown(ctx)
+
+tracer := cfgotel.Tracer()
+
+// In tests: use the noop tracer (no real backend needed).
+tracer = noop.NewTracerProvider().Tracer("")
+
+// Wrap at startup.
+tracedProvider := cfgotel.NewTracedProvider(rawProvider, tracer)
+tracedMemory   := cfgotel.NewTracedMemoryStore(rawStore, tracer)
+
+agent, _ := chainforge.NewAgent(
+    chainforge.WithProvider(tracedProvider),
+    chainforge.WithMemory(tracedMemory),
+)
+```
+
+### Spans and attributes
+
+| Span name | Attributes |
+|---|---|
+| `chainforge.provider.chat` | provider, model, messages, stop_reason, input_tokens, output_tokens |
+| `chainforge.provider.chat_stream` | provider, model, messages, stop_reason, input_tokens, output_tokens |
+| `chainforge.memory.get` | session_id, message_count |
+| `chainforge.memory.append` | session_id, message_count |
+| `chainforge.memory.clear` | session_id |
+
+### Streaming span lifecycle
+
+`chainforge.provider.chat_stream` ends **after the last event is drained**,
+not after the channel is opened. This captures true end-to-end streaming
+latency including tool dispatch time.
+
+### Composing logging + tracing
+
+```go
+rawProvider    := anthropicProvider
+loggedProvider := logging.NewLoggedProvider(rawProvider, logger)
+tracedProvider := otel.NewTracedProvider(loggedProvider, tracer)
+
+// tracedProvider → loggedProvider → rawProvider
+// Both wrappers are active; order determines span/log nesting.
+```
+
+## Server logs
+
+The HTTP server emits JSON logs for every request:
+
+```json
+{
+  "time": "2026-03-17T12:00:00Z",
+  "level": "INFO",
+  "msg": "http request",
+  "method": "POST",
+  "path": "/v1/chat",
+  "status": 200,
+  "duration": "1.234s",
+  "remote_addr": "10.0.0.1:54321"
+}
+```
+
+## Local tracing with Jaeger
+
+```bash
+# Start the full stack
+cd deploy/
+ANTHROPIC_API_KEY=sk-ant-... docker-compose up -d
+
+# Enable OTel in config.yaml
+echo "otel_enabled: true" >> config.yaml
+
+# View traces at http://localhost:16686
+```

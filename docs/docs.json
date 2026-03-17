@@ -49,6 +49,14 @@
             ]
           },
           {
+            "group": "Production",
+            "pages": [
+              "guides/deployment",
+              "guides/observability",
+              "guides/benchmarks"
+            ]
+          },
+          {
             "group": "Reference",
             "pages": [
               "reference/options"

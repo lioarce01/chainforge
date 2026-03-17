@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: chainforge
+  namespace: chainforge
+  labels:
+    app.kubernetes.io/name: chainforge
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: chainforge
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP

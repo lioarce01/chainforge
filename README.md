@@ -24,6 +24,9 @@ result, err := agent.Run(ctx, "session-1", "What is 2^10 + 144?")
 - **Streaming** — `RunStream()` returns a channel of events
 - **Memory** — pluggable `MemoryStore` interface; in-memory implementation included
 - **Structured logging** — `slog`-based, configurable via `WithLogger`
+- **Vector memory** — Qdrant adapter for semantic search over conversation history
+- **HTTP server** — production-ready chi router with SSE streaming, CORS, and graceful shutdown
+- **OpenTelemetry** — distributed tracing via `pkg/middleware/otel`; plug-in without changing agent code
 
 ## Installation
 
@@ -127,17 +130,85 @@ Parallel always returns all results — a failed branch doesn't cancel siblings.
 | `WithTemperature(f)` | 0.7 |
 | `WithLogger(l)` | `slog.Default()` |
 
+## Benchmarks
+
+All benchmarks run on AMD Ryzen 7 7800X3D (16 threads) with a zero-latency mock provider — numbers reflect pure framework overhead, not network or model time.
+
+```
+go test ./tests/bench/... -bench=. -benchmem
+```
+
+### Agent loop
+
+| Benchmark | ns/op | B/op | allocs/op |
+|---|---|---|---|
+| `AgentRun` (single session) | 3,582 | 1,324 | 17 |
+| `AgentRunWithTool` (tool dispatch) | 3,677 | 1,482 | 19 |
+| `AgentConcurrent` (8 goroutines) | 6,307 | 5,269 | 15 |
+| `AgentRunStream` (stream drain) | 10,074 | 10,297 | 33 |
+
+Tool dispatch adds ~100 ns over a plain `AgentRun`. Concurrent sessions scale linearly with no lock contention between independent sessions.
+
+### Memory store
+
+| Benchmark | ns/op | B/op | allocs/op |
+|---|---|---|---|
+| `InMemoryAppend` | 213 | 459 | **0** |
+| `InMemoryConcurrentSessions` | 292 | 491 | 1 |
+| `InMemoryGet` (10 messages) | 251 | 896 | 1 |
+| `InMemoryGet` (100 messages) | 2,520 | 9,472 | 1 |
+| `InMemoryGet` (1000 messages) | 26,485 | 90,112 | 1 |
+
+Append is allocation-free. Get allocates a single slice regardless of history length.
+
+### Streaming
+
+| Benchmark | ns/op | B/op | allocs/op |
+|---|---|---|---|
+| `StreamConcurrent` | 3,251 | 14,082 | 31 |
+| `StreamDrain` (1 KB response, 64 B chunks) | 11,282 | 14,737 | 33 |
+| `StreamChunkSizes/chunk=256` | 9,166 | 14,640 | 25 |
+| `StreamChunkSizes/chunk=1024` | 5,748 | 7,580 | 18 |
+
+Larger chunks reduce allocations proportionally. Concurrent stream draining outperforms sequential due to goroutine scheduling overlap.
+
+### E2E latency (real provider)
+
+Measured against `openrouter/hunter-alpha` via OpenRouter (20 requests, 4 concurrent workers):
+
+| Metric | Value |
+|---|---|
+| p50 | 3.86 s |
+| p95 | 5.80 s |
+| p99 | 5.80 s |
+| mean | 3.88 s |
+| RPS | 0.90 |
+| errors | 0 |
+
+```bash
+OPENAI_API_KEY=sk-... go run ./cmd/bench/main.go \
+  --config config.yaml \
+  --concurrency 4 --requests 20 --warmup 2
+```
+
 ## Project Structure
 
 ```
-pkg/core/          # Provider, Tool, MemoryStore interfaces — zero external deps
-pkg/providers/     # Anthropic, OpenAI, Ollama adapters
-pkg/tools/         # Calculator, WebSearch, FuncTool, Schema builder
-pkg/memory/        # InMemoryStore
-pkg/mcp/           # MCP client — Streamable HTTP and Stdio transports
-pkg/orchestrator/  # Sequential and Parallel runners
-examples/          # single-agent, multi-agent, mcp-agent
-tests/             # Unit tests (mock provider, 14 scenarios)
+pkg/core/           # Provider, Tool, MemoryStore interfaces — zero external deps
+pkg/providers/      # Anthropic, OpenAI, Ollama adapters
+pkg/tools/          # Calculator, WebSearch, FuncTool, Schema builder
+pkg/memory/         # InMemoryStore, Qdrant vector store
+pkg/mcp/            # MCP client — Streamable HTTP and Stdio transports
+pkg/orchestrator/   # Sequential and Parallel runners
+pkg/middleware/     # Logging and OpenTelemetry middleware (wrap any provider)
+pkg/benchutil/      # MockProvider, MockToolProvider, LatencyRecorder
+pkg/server/         # HTTP server — config, SSE adapter, chi router, handlers
+cmd/server/         # Production binary with graceful shutdown
+cmd/bench/          # E2E latency CLI (--mock / --concurrency / --requests)
+deploy/             # Dockerfile, docker-compose, k8s manifests, Helm chart
+examples/           # single-agent, multi-agent, mcp-agent, server-agent
+tests/bench/        # 16 micro-benchmarks (agent, memory, streaming)
+tests/              # Unit tests (mock provider, 14 scenarios)
 ```
 
 ## Running Tests
@@ -149,4 +220,13 @@ go test ./...
 # Integration tests (requires API keys)
 ANTHROPIC_API_KEY=sk-... go test -tags=integration ./tests/integration/...
 OPENAI_API_KEY=sk-...    go test -tags=integration ./tests/integration/...
+
+# Micro-benchmarks (no API key needed)
+go test ./tests/bench/... -bench=. -benchmem
+
+# Stable numbers (longer run)
+go test ./tests/bench/... -bench=. -benchmem -benchtime=10s
+
+# E2E latency benchmark (mock — no API key)
+go run ./cmd/bench/main.go --mock --concurrency 4 --requests 50 --warmup 5
 ```

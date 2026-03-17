@@ -19,6 +19,9 @@
 .env.*
 !.env.example
 
+# Local config (contains provider settings, API keys via env)
+config.yaml
+
 # IDE
 .idea/
 .vscode/

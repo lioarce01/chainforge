@@ -1,0 +1,16 @@
+apiVersion: v2
+name: chainforge
+description: chainforge HTTP agent server Helm chart
+type: application
+version: 0.3.0
+appVersion: "0.3.0"
+keywords:
+  - ai
+  - llm
+  - agent
+  - chainforge
+home: https://github.com/lioarce01/chainforge
+sources:
+  - https://github.com/lioarce01/chainforge
+maintainers:
+  - name: lioarce01

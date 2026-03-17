@@ -1,0 +1,140 @@
+---
+title: "Benchmarks"
+description: "Measuring chainforge framework overhead and throughput"
+---
+
+chainforge ships micro-benchmarks that measure **framework overhead** (memory
+lookups, channel scheduling, message marshalling) with a zero-latency mock
+provider, plus an end-to-end CLI for real provider throughput.
+
+## Running micro-benchmarks
+
+```bash
+# All benchmarks, all packages
+go test -bench=. -benchmem ./tests/bench/
+
+# Single benchmark with custom iterations
+go test -bench=BenchmarkAgentRun -benchmem -count=3 ./tests/bench/
+
+# Race detector (catches data races under concurrent load)
+go test -bench=BenchmarkAgentConcurrent -race ./tests/bench/
+```
+
+### What each benchmark measures
+
+| Benchmark | What it isolates |
+|---|---|
+| `BenchmarkAgentRun` | Full `agent.Run()` overhead at zero LLM latency |
+| `BenchmarkAgentRunStream` | `agent.RunStream()` channel drain overhead |
+| `BenchmarkAgentRunWithTool` | Tool dispatch + ordering cost |
+| `BenchmarkAgentConcurrent` | Goroutine scheduling under parallel load |
+| `BenchmarkAgentSharedSession` | History load cost as session grows |
+| `BenchmarkStreamChunkSizes` | SSE chunk granularity vs drain speed |
+| `BenchmarkInMemoryGetGrowingHistory` | In-memory store Get as history grows |
+
+### Results (AMD Ryzen 7 7800X3D, 16 threads)
+
+#### Agent loop
+
+| Benchmark | ns/op | B/op | allocs/op |
+|---|---|---|---|
+| `AgentRun` | 3,582 | 1,324 | 17 |
+| `AgentRunWithTool` | 3,677 | 1,482 | 19 |
+| `AgentConcurrent` (8 goroutines) | 6,307 | 5,269 | 15 |
+| `AgentRunStream` | 10,074 | 10,297 | 33 |
+
+Tool dispatch adds ~100 ns over a plain run. Concurrent sessions scale linearly — no lock contention between independent sessions.
+
+#### Memory store
+
+| Benchmark | ns/op | B/op | allocs/op |
+|---|---|---|---|
+| `InMemoryAppend` | 213 | 459 | **0** |
+| `InMemoryConcurrentSessions` | 292 | 491 | 1 |
+| `InMemoryGet` (10 messages) | 251 | 896 | 1 |
+| `InMemoryGet` (100 messages) | 2,520 | 9,472 | 1 |
+| `InMemoryGet` (1000 messages) | 26,485 | 90,112 | 1 |
+
+Append is allocation-free. Get allocates a single slice regardless of history length.
+
+#### Streaming
+
+| Benchmark | ns/op | B/op | allocs/op |
+|---|---|---|---|
+| `StreamConcurrent` | 3,251 | 14,082 | 31 |
+| `StreamDrain` (1 KB, 64 B chunks) | 11,282 | 14,737 | 33 |
+| `StreamChunkSizes/chunk=256` | 9,166 | 14,640 | 25 |
+| `StreamChunkSizes/chunk=1024` | 5,748 | 7,580 | 18 |
+
+Larger chunks reduce allocations proportionally. Concurrent draining outperforms sequential due to goroutine scheduling overlap.
+
+### Interpreting results
+
+- `ns/op` — nanoseconds per agent loop iteration (lower is better)
+- `B/op` — bytes allocated per op (lower = less GC pressure)
+- `allocs/op` — number of heap allocations per op
+
+All micro-benchmarks use `pkg/benchutil.MockProvider` at zero latency.
+Real LLM calls add 200ms–5s per turn depending on provider and model.
+
+## Qdrant benchmarks
+
+Qdrant benchmarks require a running Qdrant instance and are automatically
+skipped in CI when `QDRANT_URL` is not set:
+
+```bash
+QDRANT_URL=localhost:6334 go test -bench=BenchmarkQdrant -benchmem ./tests/bench/
+```
+
+## End-to-end CLI benchmark
+
+The `cmd/bench` binary measures real provider throughput:
+
+```bash
+go build -o chainforge-bench ./cmd/bench/
+
+# Mock provider — framework overhead only
+./chainforge-bench --mock --requests 100 --concurrency 4
+
+# Real provider
+ANTHROPIC_API_KEY=sk-ant-... \
+./chainforge-bench \
+  --config config.yaml \
+  --requests 50 \
+  --concurrency 2 \
+  --warmup 5
+```
+
+Output:
+
+```
+chainforge benchmark
+  provider    : anthropic
+  model       : claude-sonnet-4-6
+  concurrency : 2
+  requests    : 50 (+ 5 warmup)
+
+Warming up (5 requests)...
+Running benchmark (50 requests, concurrency 2)...
+
+Results:
+  requests : 20
+  p50      : 3.86s
+  p95      : 5.80s
+  p99      : 5.80s
+  mean     : 3.88s
+  errors   : 0
+  total    : 22.3s
+  rps      : 0.90
+```
+
+## MockProvider API
+
+For custom benchmarks, `pkg/benchutil.MockProvider` supports:
+
+```go
+p := benchutil.NewMockProvider(benchutil.LargeResponseText(512))
+p.Latency = 50 * time.Millisecond // simulate network RTT
+p.ChunkSize = 64                  // bytes per stream chunk
+p.InjectError = errors.New("rate limited") // test error paths
+```
