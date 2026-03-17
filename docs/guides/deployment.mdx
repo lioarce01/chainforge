@@ -12,8 +12,7 @@ The fastest way to serve an agent over HTTP is `chainforge.Serve`:
 
 ```go
 agent, _ := chainforge.NewAgent(
-    chainforge.WithProvider(anthropic.New(os.Getenv("ANTHROPIC_API_KEY"))),
-    chainforge.WithModel("claude-sonnet-4-6"),
+    chainforge.WithAnthropic(os.Getenv("ANTHROPIC_API_KEY"), "claude-sonnet-4-6"),
     chainforge.WithLogging(slog.Default()),
 )
 log.Fatal(chainforge.Serve(":8080", agent))
@@ -95,7 +94,7 @@ Configuration is loaded from a YAML file with environment variable overrides.
 host: "0.0.0.0"
 port: 8080
 provider:
-  name: "anthropic"    # "anthropic" | "openai" | "ollama"
+  name: "anthropic"    # "anthropic" | "openai" | "ollama" | "gemini"
 model: "claude-sonnet-4-6"
 log_level: "info"
 log_format: "json"
@@ -106,6 +105,7 @@ otel_endpoint: "localhost:4317"
 ```bash
 # API keys via environment only
 ANTHROPIC_API_KEY=sk-ant-... chainforge-server --config config.yaml
+GEMINI_API_KEY=...          chainforge-server --config config.yaml
 ```
 
 ## Docker
