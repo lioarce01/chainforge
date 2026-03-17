@@ -41,3 +41,13 @@ func (e *ProviderError) Error() string {
 }
 
 func (e *ProviderError) Unwrap() error { return e.Err }
+
+// NewToolError constructs a ToolError with the given tool name and underlying error.
+func NewToolError(toolName string, err error) *ToolError {
+	return &ToolError{ToolName: toolName, Err: err}
+}
+
+// NewProviderError constructs a ProviderError with the given provider name, HTTP status, and underlying error.
+func NewProviderError(provider string, statusCode int, err error) *ProviderError {
+	return &ProviderError{Provider: provider, StatusCode: statusCode, Err: err}
+}

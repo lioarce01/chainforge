@@ -12,6 +12,47 @@ All options are passed to `chainforge.NewAgent(...)` as functional options.
 | `WithProvider(p)` | `core.Provider` | **Required.** LLM provider implementation. |
 | `WithModel(model)` | `string` | **Required.** Model identifier (e.g. `"claude-sonnet-4-6"`). |
 
+### Provider shortcuts
+
+These one-call shortcuts set both provider and model atomically:
+
+| Shorthand | Equivalent |
+|---|---|
+| `WithAnthropic(apiKey, model)` | `WithProvider(anthropic.New(apiKey))` + `WithModel(model)` |
+| `WithOpenAI(apiKey, model)` | `WithProvider(openai.New(apiKey))` + `WithModel(model)` |
+| `WithOllama(baseURL, model)` | `WithProvider(ollama.New(baseURL))` + `WithModel(model)` |
+| `WithOpenAICompatible(apiKey, baseURL, name, model)` | `WithProvider(openai.NewWithBaseURL(...))` + `WithModel(model)` |
+
+```go
+agent, err := chainforge.NewAgent(
+    chainforge.WithAnthropic(os.Getenv("ANTHROPIC_API_KEY"), "claude-sonnet-4-6"),
+    chainforge.WithSystemPrompt("You are a helpful assistant."),
+)
+```
+
+Later options override earlier ones, so `WithAnthropic` followed by `WithModel("other")` uses `"other"`.
+
+### Config file
+
+Load provider configuration from a YAML file:
+
+```go
+agent, err := chainforge.FromConfigFile("config.yaml",
+    chainforge.WithSystemPrompt("You are a helpful assistant."),
+    chainforge.WithTools(myTools...),
+)
+```
+
+Minimal `config.yaml`:
+
+```yaml
+provider: anthropic   # anthropic | openai | ollama
+api_key: sk-ant-...   # or set ANTHROPIC_API_KEY env var
+model: claude-sonnet-4-6
+```
+
+`FromConfigFile` wraps all errors with `"chainforge: FromConfigFile: ..."` for easy identification.
+
 ## Behaviour
 
 | Option | Default | Description |
@@ -46,6 +87,32 @@ All options are passed to `chainforge.NewAgent(...)` as functional options.
 | `WithLogging(logger)` | — | Wraps the provider with slog middleware. Logs every Chat/ChatStream call with latency and token counts. Falls back to `slog.Default()` if logger is nil. |
 | `WithTracing()` | — | Wraps the provider with OpenTelemetry spans. Uses the global tracer — call `otel.InitTracerProvider` first. No-op if the global tracer is uninitialised. |
 
+### ProviderBuilder
+
+`ProviderBuilder` is an explicit, ordered alternative to the `WithLogging` / `WithRetry` / `WithTracing` options. Use it when you need fine-grained control over wrapper ordering, or want to share a pre-built provider across multiple agents.
+
+```go
+p := chainforge.NewProviderBuilder(anthropic.New(apiKey)).
+    WithRetry(3).       // retry first (innermost)
+    WithLogging(logger). // log retried calls
+    Build()
+
+agent, _ := chainforge.NewAgent(
+    chainforge.WithProvider(p),
+    chainforge.WithModel("claude-sonnet-4-6"),
+)
+```
+
+| Method | Description |
+|---|---|
+| `NewProviderBuilder(base)` | Start building from a base provider |
+| `.WithRetry(maxAttempts)` | Add exponential-backoff retry |
+| `.WithLogging(logger)` | Add slog logging (nil → `slog.Default()`) |
+| `.WithTracing()` | Add OpenTelemetry spans |
+| `.Build()` | Return the composed provider |
+
+`Build` is idempotent — wrappers are applied in the order they were registered.
+
 Both `WithLogging` and `WithTracing` are applied after all other options are resolved, so their position relative to `WithProvider` does not matter. They can be stacked:
 
 ```go
@@ -65,3 +132,23 @@ chainforge.NewAgent(
 | `ErrToolNotFound` | LLM called a tool name that isn't registered. Non-fatal — returned as tool result. |
 | `ErrNoProvider` | `NewAgent` called without `WithProvider`. |
 | `ErrNoModel` | `NewAgent` called without `WithModel`. |
+
+### Error constructors
+
+Use the typed constructors to build structured errors:
+
+```go
+// ToolError — wraps a tool execution failure
+err := core.NewToolError("my_tool", originalErr)
+// Error() → `tool "my_tool": <originalErr>`
+
+// ProviderError — wraps a provider failure with optional HTTP status
+err := core.NewProviderError("anthropic", 429, originalErr)
+// Error() → `provider "anthropic" (status 429): <originalErr>`
+
+// Zero status code omits the status segment:
+err := core.NewProviderError("openai", 0, originalErr)
+// Error() → `provider "openai": <originalErr>`
+```
+
+Both implement `Unwrap()` so `errors.Is` / `errors.As` work transparently.
