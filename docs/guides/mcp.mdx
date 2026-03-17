@@ -50,6 +50,29 @@ mcp.Stdio("my-server").
     WithEnv("API_KEY=" + os.Getenv("MY_API_KEY"))
 ```
 
+## Pre-warming connections
+
+By default MCP servers connect lazily on the first `Run` call. Call `WarmMCP` to pre-connect before serving traffic — useful in HTTP handlers where you want predictable first-request latency:
+
+```go
+agent, err := chainforge.NewAgent(
+    chainforge.WithMCPServer(mcp.HTTP(os.Getenv("MCP_URL")).WithName("remote")),
+    // ...
+)
+if err != nil { panic(err) }
+defer agent.Close()
+
+// Pre-connect all MCP servers during startup.
+if err := agent.WarmMCP(ctx); err != nil {
+    log.Fatal("MCP pre-connect failed:", err)
+}
+
+// Subsequent Run calls have no connection overhead.
+result, err := agent.Run(ctx, "session-1", userMessage)
+```
+
+`WarmMCP` is idempotent — calling it multiple times (or mixing with `Run`) is safe. Returns `nil` immediately if no MCP servers are configured.
+
 ## Cleanup
 
 Always defer `Close` to terminate subprocesses and release HTTP connections:
