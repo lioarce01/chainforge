@@ -23,8 +23,9 @@ func RouteOf(name, description string, agent *chainforge.Agent) Route {
 // Router dispatches input to one of several named agents.
 // Use NewRouter for programmatic routing or NewLLMRouter for AI-driven routing.
 type Router struct {
-	routes map[string]Route
-	pick   func(ctx context.Context, input string) (string, error)
+	routes       map[string]Route
+	pick         func(ctx context.Context, input string) (string, error)
+	defaultRoute string // name of the fallback route; empty = no default
 }
 
 // NewRouter creates a Router with a custom picker function.
@@ -83,6 +84,13 @@ func NewLLMRouter(supervisor *chainforge.Agent, routes ...Route) *Router {
 	return &Router{routes: m, pick: pick}
 }
 
+// WithDefault sets a fallback route used when the picker returns an unrecognised name.
+// Chainable: router.WithDefault("general").
+func (r *Router) WithDefault(routeName string) *Router {
+	r.defaultRoute = routeName
+	return r
+}
+
 // Route dispatches input to the selected agent and returns its response.
 // sessionID is namespaced per route so each agent maintains its own history.
 func (r *Router) Route(ctx context.Context, sessionID, input string) (string, error) {
@@ -93,6 +101,13 @@ func (r *Router) Route(ctx context.Context, sessionID, input string) (string, er
 
 	route, ok := r.routes[name]
 	if !ok {
+		// Fall back to the default route if one is configured.
+		if r.defaultRoute != "" {
+			if def, found := r.routes[r.defaultRoute]; found {
+				routeSessionID := fmt.Sprintf("%s:%s", sessionID, def.Name)
+				return def.Agent.Run(ctx, routeSessionID, input)
+			}
+		}
 		names := make([]string, 0, len(r.routes))
 		for k := range r.routes {
 			names = append(names, k)

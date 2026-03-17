@@ -91,12 +91,25 @@ result, err := router.Route(ctx, "session-1", userMessage)
 
 The supervisor receives a structured prompt listing all routes with their descriptions and must respond with the exact route name.
 
+### Default route
+
+Set a fallback route that is used when the picker returns an unrecognised name:
+
+```go
+router := orchestrator.NewRouter(pick,
+    orchestrator.RouteOf("coder",   "writes code",       coderAgent),
+    orchestrator.RouteOf("general", "general questions", generalAgent),
+).WithDefault("general") // fallback when picker returns unknown name
+```
+
+`WithDefault` is chainable and returns `*Router`. If the default route name itself is not registered, the error falls through normally.
+
 ### Behaviour
 
 - **Session namespacing** — each route runs under `sessionID:routeName`, so agents maintain independent history across calls.
 - **LLM response normalisation** — the supervisor response is trimmed, lowercased, and stripped of quotes to handle common LLM formatting quirks.
 - **Supervisor session** — the LLM supervisor always uses the fixed session `router:supervisor` so routing decisions don't pollute conversation history.
-- **Unknown route error** — returns a clear error listing available route names.
+- **Unknown route error** — returns a clear error listing available route names (skipped when a valid default route is set).
 
 ### Combining patterns
 
