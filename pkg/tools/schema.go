@@ -71,3 +71,23 @@ func (s *Schema) MustBuild() json.RawMessage {
 	}
 	return b
 }
+
+// AddString adds a string property to the schema.
+func (s *Schema) AddString(name, description string, required bool) *Schema {
+	return s.Add(name, Property{Type: TypeString, Description: description}, required)
+}
+
+// AddInt adds an integer property to the schema.
+func (s *Schema) AddInt(name, description string, required bool) *Schema {
+	return s.Add(name, Property{Type: TypeInteger, Description: description}, required)
+}
+
+// AddNumber adds a number (float) property to the schema.
+func (s *Schema) AddNumber(name, description string, required bool) *Schema {
+	return s.Add(name, Property{Type: TypeNumber, Description: description}, required)
+}
+
+// AddBool adds a boolean property to the schema.
+func (s *Schema) AddBool(name, description string, required bool) *Schema {
+	return s.Add(name, Property{Type: TypeBoolean, Description: description}, required)
+}
