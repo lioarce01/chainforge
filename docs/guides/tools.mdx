@@ -47,6 +47,95 @@ weatherTool, _ := tools.Func(
 chainforge.WithTools(weatherTool)
 ```
 
+## Schema shorthand methods
+
+The `Schema` builder now has typed shorthand methods so you don't need to construct `Property` literals manually:
+
+```go
+schema := tools.NewSchema().
+    AddString("city",      "City name",          true).
+    AddInt("limit",        "Max results",         false).
+    AddNumber("threshold", "Min confidence score", false).
+    AddBool("verbose",     "Enable verbose output", false).
+    MustBuild()
+```
+
+Equivalent to the explicit form:
+
+```go
+schema := tools.NewSchema().
+    Add("city", tools.Property{Type: tools.TypeString, Description: "City name"}, true).
+    MustBuild()
+```
+
+| Method | JSON schema type |
+|---|---|
+| `AddString(name, desc, required)` | `"string"` |
+| `AddInt(name, desc, required)` | `"integer"` |
+| `AddNumber(name, desc, required)` | `"number"` |
+| `AddBool(name, desc, required)` | `"boolean"` |
+
+## Struct-based schema
+
+Generate a JSON schema directly from a Go struct using field tags — no `NewSchema()` calls needed:
+
+```go
+type SearchInput struct {
+    Query  string `json:"query"  cf:"required,description=The search query"`
+    Limit  int    `json:"limit"  cf:"description=Max results to return"`
+    Format string `json:"format" cf:"enum=json|text|markdown"`
+}
+
+schema, err := tools.SchemaFromStruct[SearchInput]()
+// or panic on error:
+schema = tools.MustSchemaFromStruct[SearchInput]()
+```
+
+**Supported tags:**
+
+| Tag | Effect |
+|---|---|
+| `json:"fieldName"` | Property name (falls back to Go field name) |
+| `cf:"required"` | Marks the field as required |
+| `cf:"description=My desc"` | Sets the property description |
+| `cf:"enum=a\|b\|c"` | Restricts to listed values |
+
+Multiple `cf` directives can be combined: `cf:"required,description=The query,enum=json|text"`.
+
+**Go type → JSON schema type:**
+
+| Go type | Schema type |
+|---|---|
+| `string` | `"string"` |
+| `int`, `int8`…`int64`, `uint`… | `"integer"` |
+| `float32`, `float64` | `"number"` |
+| `bool` | `"boolean"` |
+| `[]T`, `[N]T` | `"array"` |
+| everything else | `"object"` |
+
+Pointer types are dereferenced one level. Unexported fields are skipped.
+
+## Parsing tool input
+
+Inside a tool handler, use `tools.ParseInput[T]` to unmarshal the JSON input string into a typed struct:
+
+```go
+type WeatherInput struct {
+    City  string `json:"city"`
+    Units string `json:"units"`
+}
+
+func(ctx context.Context, input string) (string, error) {
+    args, err := tools.ParseInput[WeatherInput](input)
+    if err != nil {
+        return "", err
+    }
+    return fetchWeather(args.City, args.Units)
+}
+```
+
+`ParseInput` returns a `tools: invalid input: ...` error on malformed JSON.
+
 ## Tool errors
 
 Tool execution errors are **non-fatal**. The error string is returned to the LLM as the tool result so the model can observe and handle it — the agent loop continues.

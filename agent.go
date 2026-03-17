@@ -2,7 +2,6 @@ package chainforge
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/lioarce01/chainforge/pkg/core"
 	mcppkg "github.com/lioarce01/chainforge/pkg/mcp"
+	"github.com/lioarce01/chainforge/pkg/tools"
 )
 
 // Agent runs the agentic loop: call LLM → dispatch tools → repeat.
@@ -434,10 +434,16 @@ func (a *Agent) buildToolDefs() []core.ToolDefinition {
 }
 
 // parseToolInput is a helper to unmarshal JSON tool input into a typed struct.
+// Delegates to the public tools.ParseInput so users can call it directly.
 func parseToolInput[T any](input string) (T, error) {
-	var v T
-	if err := json.Unmarshal([]byte(input), &v); err != nil {
-		return v, fmt.Errorf("invalid tool input: %w", err)
-	}
-	return v, nil
+	return tools.ParseInput[T](input)
+}
+
+// WarmMCP pre-connects all configured MCP servers before the first Run call.
+// Returns nil immediately if no MCP servers are configured.
+// Calling WarmMCP is optional — Run and RunStream also connect lazily — but
+// pre-connecting eliminates the latency spike on the first request.
+func (a *Agent) WarmMCP(ctx context.Context) error {
+	a.mcpOnce.Do(func() { a.mcpErr = a.connectMCP(ctx) })
+	return a.mcpErr
 }
