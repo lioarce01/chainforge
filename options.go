@@ -34,8 +34,9 @@ type agentConfig struct {
 	runTimeout       time.Duration // 0 = no timeout
 	streamBufSize    int           // RunStream channel buffer capacity (default: 16)
 	toolConcurrency  int           // 0 = unlimited concurrent tool goroutines
-	traceAttrs       func(context.Context) []attribute.KeyValue // extra OTel span attrs; may be nil
-	outputSchema     json.RawMessage                            // if set, validate LLM output as JSON
+	traceAttrs        func(context.Context) []attribute.KeyValue // extra OTel span attrs; may be nil
+	outputSchema      json.RawMessage                            // if set, validate LLM output as JSON
+	historySummarizer *Agent                                     // if set, summarize old messages instead of dropping
 }
 
 func defaultConfig() agentConfig {
@@ -207,6 +208,18 @@ func WithTraceAttributes(fn func(context.Context) []attribute.KeyValue) AgentOpt
 // LLM to respond with valid JSON matching the schema.
 func WithStructuredOutput(schema json.RawMessage) AgentOption {
 	return func(c *agentConfig) { c.outputSchema = schema }
+}
+
+// WithHistorySummarizer sets an agent used to summarize old messages when the
+// history exceeds WithMaxHistory. Instead of simply dropping the oldest messages,
+// the excess is summarized into a single compact message and prepended to the
+// retained tail.
+//
+// Requires WithMaxHistory to be set to a positive value; has no effect otherwise.
+// The summarizer runs under a dedicated session "<sessionID>:summarizer" so its
+// own history does not pollute the parent session.
+func WithHistorySummarizer(a *Agent) AgentOption {
+	return func(c *agentConfig) { c.historySummarizer = a }
 }
 
 // WithStreamBufferSize sets the RunStream channel buffer capacity (default: 16).

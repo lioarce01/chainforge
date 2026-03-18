@@ -76,6 +76,7 @@ model: claude-sonnet-4-6
 | `WithTools(tools...)` | Register one or more tools. Can be called multiple times. |
 | `WithMemory(m)` | Attach a memory store for cross-run history persistence. Built-in stores: `inmemory`, `sqlite`, `postgres`, `redis`, `qdrant`. See the [Memory guide](/guides/memory). |
 | `WithStructuredOutput(schema)` | Validate every final LLM response against a JSON schema (`json.RawMessage`). Returns `ErrInvalidOutput` if the response is not valid JSON or its top-level type doesn't match. Also injects a system prompt hint. See the [Structured Output guide](/guides/structured-output). |
+| `WithHistorySummarizer(a)` | When history exceeds `WithMaxHistory`, compress the overflow into a single `[Summary: ...]` message using agent `a` instead of dropping old messages. Requires `WithMaxHistory > 0`. The summarizer runs under `"<sessionID>:summarizer"`. Errors from the summarizer propagate immediately to the caller. See the [Memory guide](/guides/memory). |
 
 ## MCP
 

@@ -138,6 +138,40 @@ type MemoryStore interface {
 }
 ```
 
+## History summarization
+
+When `WithMaxHistory` is set, old messages are normally dropped. Use `WithHistorySummarizer` to compress them into a single compact message instead:
+
+```go
+// A cheap, fast model works well as a summarizer.
+summarizer, _ := chainforge.NewAgent(
+    chainforge.WithAnthropic(apiKey, "claude-haiku-4-5-20251001"),
+    chainforge.WithSystemPrompt("Summarize the conversation concisely, preserving key facts."),
+)
+
+agent, _ := chainforge.NewAgent(
+    chainforge.WithAnthropic(apiKey, "claude-sonnet-4-6"),
+    chainforge.WithMemory(inmemory.New()),
+    chainforge.WithMaxHistory(10),          // allow 10 messages per run
+    chainforge.WithHistorySummarizer(summarizer), // compress instead of drop
+)
+```
+
+**How it works:**
+
+When history exceeds `maxHistory`:
+
+1. The oldest `len(history) - (maxHistory - 1)` messages are sent to the summarizer agent.
+2. The summary is stored as a single `[Summary: ...]` message.
+3. The `maxHistory - 1` most recent messages are kept verbatim.
+4. The compressed history (summary + recent) replaces the full history in the memory store.
+
+The result is always `maxHistory` messages: one summary + `maxHistory-1` recent. On subsequent runs the same compression can happen again, layering summaries.
+
+**Session isolation:** the summarizer runs under `"<sessionID>:summarizer"` so its internal conversation does not interfere with the parent session.
+
+**Error handling:** if the summarizer fails, `Run` returns the error immediately. There is no silent fallback to dropping messages.
+
 ## Multi-agent memory isolation
 
 The orchestrator automatically namespaces session IDs per step (`"sessionID:step-N"`), so each agent in a sequential pipeline has isolated history.

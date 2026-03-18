@@ -490,7 +490,9 @@ func (a *Agent) callTool(ctx context.Context, tc core.ToolCall) (string, error) 
 }
 
 // loadHistory fetches history from memory (returns nil if no memory store).
-// If WithMaxHistory is set, only the most recent n messages are returned.
+// If WithMaxHistory is set and history exceeds the limit:
+//   - WithHistorySummarizer: old messages are summarized into one compact message.
+//   - Otherwise: oldest messages are dropped.
 func (a *Agent) loadHistory(ctx context.Context, sessionID string) ([]core.Message, error) {
 	if a.cfg.memory == nil {
 		return nil, nil
@@ -500,9 +502,61 @@ func (a *Agent) loadHistory(ctx context.Context, sessionID string) ([]core.Messa
 		return nil, err
 	}
 	if a.cfg.maxHistory > 0 && len(msgs) > a.cfg.maxHistory {
-		msgs = msgs[len(msgs)-a.cfg.maxHistory:]
+		if a.cfg.historySummarizer != nil {
+			msgs, err = a.summarizeHistory(ctx, sessionID, msgs)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			msgs = msgs[len(msgs)-a.cfg.maxHistory:]
+		}
 	}
 	return msgs, nil
+}
+
+// summarizeHistory condenses messages that overflow maxHistory into a single
+// summary message. It keeps (maxHistory-1) recent messages and prepends one
+// summary message, for a total of maxHistory messages. The compressed history
+// is persisted back to the memory store.
+func (a *Agent) summarizeHistory(ctx context.Context, sessionID string, msgs []core.Message) ([]core.Message, error) {
+	keep := a.cfg.maxHistory - 1
+	if keep < 0 {
+		keep = 0
+	}
+	toSummarize := msgs[:len(msgs)-keep]
+	recent := msgs[len(msgs)-keep:]
+
+	// Build a plain-text prompt of the messages to compress.
+	var sb strings.Builder
+	sb.WriteString("Summarize the following conversation history concisely, preserving key facts and decisions:\n\n")
+	for _, m := range toSummarize {
+		sb.WriteString(string(m.Role))
+		sb.WriteString(": ")
+		sb.WriteString(m.Content)
+		sb.WriteString("\n")
+	}
+
+	summary, err := a.cfg.historySummarizer.Run(ctx, sessionID+":summarizer", sb.String())
+	if err != nil {
+		return nil, fmt.Errorf("history summarizer: %w", err)
+	}
+
+	summaryMsg := core.Message{
+		Role:    core.RoleUser,
+		Content: "[Summary: " + summary + "]",
+	}
+
+	compressed := append([]core.Message{summaryMsg}, recent...)
+
+	// Persist the compressed history back so future runs start from the summary.
+	if err := a.cfg.memory.Clear(ctx, sessionID); err != nil {
+		return nil, fmt.Errorf("history summarizer clear: %w", err)
+	}
+	if err := a.cfg.memory.Append(ctx, sessionID, compressed...); err != nil {
+		return nil, fmt.Errorf("history summarizer append: %w", err)
+	}
+
+	return compressed, nil
 }
 
 // prependSystem ensures the system prompt is the first message if configured.
