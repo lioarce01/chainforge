@@ -27,6 +27,14 @@ const (
 	// DebugToolResult fires after each individual tool returns.
 	// DebugEvent.ToolCall, DebugEvent.ToolOutput, and DebugEvent.ToolError are set.
 	DebugToolResult DebugEventKind = "tool_result"
+
+	// DebugHITLRequest fires when a HITL gateway approval is requested for a tool call.
+	// DebugEvent.ToolCall is set. DebugEvent.Iteration is the current loop iteration.
+	DebugHITLRequest DebugEventKind = "hitl_request"
+
+	// DebugHITLResponse fires after the HITL gateway returns its decision.
+	// DebugEvent.ToolCall is set. DebugEvent.ToolOutput contains "approved=true|false".
+	DebugHITLResponse DebugEventKind = "hitl_response"
 )
 
 // DebugEvent carries the state of a single step in the agent loop.
@@ -77,6 +85,16 @@ func PrettyPrintDebugHandler(w io.Writer) DebugHandler {
 			} else {
 				fmt.Fprintf(w, "[iter %d] ✓  tool=%s  result=%s\n",
 					ev.Iteration, ev.ToolCall.Name, truncate(ev.ToolOutput, 80))
+			}
+		case DebugHITLRequest:
+			if ev.ToolCall != nil {
+				fmt.Fprintf(w, "[iter %d] ⏸  hitl_request  tool=%s\n",
+					ev.Iteration, ev.ToolCall.Name)
+			}
+		case DebugHITLResponse:
+			if ev.ToolCall != nil {
+				fmt.Fprintf(w, "[iter %d] ⏵  hitl_response  tool=%s  %s\n",
+					ev.Iteration, ev.ToolCall.Name, ev.ToolOutput)
 			}
 		}
 	}

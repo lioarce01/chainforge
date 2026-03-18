@@ -78,6 +78,35 @@ model: claude-sonnet-4-6
 | `WithStructuredOutput(schema)` | Validate every final LLM response against a JSON schema (`json.RawMessage`). Returns `ErrInvalidOutput` if the response is not valid JSON or its top-level type doesn't match. Also injects a system prompt hint. See the [Structured Output guide](/guides/structured-output). |
 | `WithHistorySummarizer(a)` | When history exceeds `WithMaxHistory`, compress the overflow into a single `[Summary: ...]` message using agent `a` instead of dropping old messages. Requires `WithMaxHistory > 0`. The summarizer runs under `"<sessionID>:summarizer"`. Errors from the summarizer propagate immediately to the caller. See the [Memory guide](/guides/memory). |
 
+## RAG (Retrieval-Augmented Generation)
+
+| Option | Description |
+|---|---|
+| `WithRetriever(r, opts...)` | Enable automatic RAG. Before the first iteration, the retriever is queried with the user message and the top-K documents are appended to the system prompt. See the [RAG guide](/guides/rag). |
+
+`opts` is `...rag.RetrieveOption`. Currently supported: `rag.WithTopK(n int)` — number of documents to retrieve (default: `5`).
+
+```go
+retriever := rag.NewQdrantRetriever(store, embedder, "kb")
+agent, _ := chainforge.NewAgent(
+    chainforge.WithAnthropic(key, "claude-sonnet-4-6"),
+    chainforge.WithRetriever(retriever, rag.WithTopK(5)),
+)
+```
+
+## HITL (Human-in-the-Loop)
+
+| Option | Description |
+|---|---|
+| `WithHITLGateway(g)` | Gate every tool call through a `hitl.Gateway` before execution. Rejected calls receive an override message instead of running. See the [HITL guide](/guides/hitl). |
+
+```go
+agent, _ := chainforge.NewAgent(
+    chainforge.WithProvider(p),
+    chainforge.WithHITLGateway(hitl.NewCLIGateway(os.Stdout, os.Stdin)),
+)
+```
+
 ## MCP
 
 | Option | Description |

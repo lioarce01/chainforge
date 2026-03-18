@@ -10,11 +10,13 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/lioarce01/chainforge/pkg/core"
+	"github.com/lioarce01/chainforge/pkg/hitl"
 	mcppkg "github.com/lioarce01/chainforge/pkg/mcp"
 	"github.com/lioarce01/chainforge/pkg/middleware/logging"
 	cfotel "github.com/lioarce01/chainforge/pkg/middleware/otel"
 	"github.com/lioarce01/chainforge/pkg/middleware/retry"
 	"github.com/lioarce01/chainforge/pkg/providers/gemini"
+	"github.com/lioarce01/chainforge/pkg/rag"
 )
 
 // agentConfig holds all configuration for an Agent.
@@ -40,6 +42,9 @@ type agentConfig struct {
 	historySummarizer *Agent                                     // if set, summarize old messages instead of dropping
 	initErr           error                                      // deferred error from provider shorthand construction
 	debugHandler      DebugHandler                               // if set, called at each agent loop step
+	retriever         rag.Retriever                              // if set, retrieved context is injected before the LLM loop
+	retrieverTopK     int                                        // number of documents to retrieve (default: 5)
+	hitlGateway       hitl.Gateway                               // if set, each tool call requires gateway approval
 }
 
 func defaultConfig() agentConfig {
@@ -251,4 +256,33 @@ func WithStreamBufferSize(n int) AgentOption {
 // LLM returns many tool calls at once.
 func WithToolConcurrency(n int) AgentOption {
 	return func(c *agentConfig) { c.toolConcurrency = n }
+}
+
+// WithRetriever enables automatic RAG (Retrieval-Augmented Generation).
+// Before each iteration loop, the retriever is queried with the user message
+// and the top-K documents are appended to the system prompt as context.
+//
+//	retriever := rag.NewQdrantRetriever(store, embedder, "kb")
+//	agent, _ := chainforge.NewAgent(
+//	    chainforge.WithAnthropic(key, "claude-sonnet-4-6"),
+//	    chainforge.WithRetriever(retriever, rag.WithTopK(5)),
+//	)
+func WithRetriever(r rag.Retriever, opts ...rag.RetrieveOption) AgentOption {
+	return func(c *agentConfig) {
+		c.retriever = r
+		o := rag.ApplyOptions(opts...)
+		c.retrieverTopK = o.TopK()
+	}
+}
+
+// WithHITLGateway registers a Human-in-the-Loop gateway that intercepts every
+// tool call before it executes. The gateway may approve (tool runs normally)
+// or reject (tool is skipped, override message returned to LLM).
+//
+//	agent, _ := chainforge.NewAgent(
+//	    chainforge.WithProvider(p),
+//	    chainforge.WithHITLGateway(hitl.NewFuncGateway(myApprover)),
+//	)
+func WithHITLGateway(g hitl.Gateway) AgentOption {
+	return func(c *agentConfig) { c.hitlGateway = g }
 }

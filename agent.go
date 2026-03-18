@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/lioarce01/chainforge/pkg/core"
+	"github.com/lioarce01/chainforge/pkg/hitl"
 	mcppkg "github.com/lioarce01/chainforge/pkg/mcp"
+	"github.com/lioarce01/chainforge/pkg/rag"
 	"github.com/lioarce01/chainforge/pkg/structured"
 	"github.com/lioarce01/chainforge/pkg/tools"
 )
@@ -139,8 +141,21 @@ func (a *Agent) RunWithUsage(ctx context.Context, sessionID, userMessage string)
 		}
 	}
 
+	// Retrieve relevant context via RAG if a retriever is configured.
+	var ragContext string
+	if a.cfg.retriever != nil {
+		topK := a.cfg.retrieverTopK
+		if topK <= 0 {
+			topK = 5
+		}
+		docs, err := a.cfg.retriever.Retrieve(ctx, userMessage, topK)
+		if err == nil && len(docs) > 0 {
+			ragContext = "Relevant context:\n" + rag.FormatContext(docs)
+		}
+	}
+
 	// Prepend system message once — it will stay at history[0] throughout.
-	history = a.prependSystem(history)
+	history = a.prependSystem(history, ragContext)
 	var totalUsage core.Usage
 
 	for i := 0; i < a.cfg.maxIterations; i++ {
@@ -202,14 +217,30 @@ func (a *Agent) RunWithUsage(ctx context.Context, sessionID, userMessage string)
 				return resp.Message.Content, totalUsage, nil
 			}
 
+			toolCalls := resp.Message.ToolCalls
+			var preRejected []core.Message
+
+			// HITL: gate each tool call through the approval gateway.
+			if a.cfg.hitlGateway != nil {
+				toolCalls, preRejected = a.runHITLApproval(ctx, sessionID, i, toolCalls)
+			}
+
 			a.cfg.logger.DebugContext(ctx, "agent: dispatching tools",
-				slog.Int("count", len(resp.Message.ToolCalls)),
+				slog.Int("count", len(toolCalls)),
+				slog.Int("rejected", len(preRejected)),
 			)
 
-			toolMsgs, err := a.dispatchTools(ctx, resp.Message.ToolCalls)
-			if err != nil {
-				return "", core.Usage{}, err // only context cancellation propagates as hard error
+			var toolMsgs []core.Message
+			if len(toolCalls) > 0 {
+				var err error
+				toolMsgs, err = a.dispatchTools(ctx, toolCalls)
+				if err != nil {
+					return "", core.Usage{}, err // only context cancellation propagates as hard error
+				}
 			}
+
+			// Merge rejected-tool messages before executed results so history is coherent.
+			toolMsgs = append(preRejected, toolMsgs...)
 
 			history = append(history, toolMsgs...)
 			if a.cfg.memory != nil {
@@ -274,7 +305,8 @@ func (a *Agent) RunStream(ctx context.Context, sessionID, userMessage string) <-
 		}
 
 		// Prepend system message once — it will stay at history[0] throughout.
-		history = a.prependSystem(history)
+		// RAG is not performed in streaming mode; use RunWithUsage for RAG support.
+		history = a.prependSystem(history, "")
 		var totalUsage core.Usage
 
 		for i := 0; i < a.cfg.maxIterations; i++ {
@@ -608,9 +640,17 @@ func (a *Agent) summarizeHistory(ctx context.Context, sessionID string, msgs []c
 }
 
 // prependSystem ensures the system prompt is the first message if configured.
-// If WithStructuredOutput is set, a JSON schema hint is appended to the prompt.
-func (a *Agent) prependSystem(history []core.Message) []core.Message {
+// extraContext is appended to the system prompt (used for RAG context injection).
+// If WithStructuredOutput is set, a JSON schema hint is also appended.
+func (a *Agent) prependSystem(history []core.Message, extraContext string) []core.Message {
 	prompt := a.cfg.systemPrompt
+	if extraContext != "" {
+		if prompt == "" {
+			prompt = extraContext
+		} else {
+			prompt = prompt + "\n\n" + extraContext
+		}
+	}
 	if len(a.cfg.outputSchema) > 0 {
 		hint := "Respond only with valid JSON matching the following schema: " + string(a.cfg.outputSchema)
 		if prompt == "" {
@@ -628,6 +668,65 @@ func (a *Agent) prependSystem(history []core.Message) []core.Message {
 	}
 	sys := core.Message{Role: core.RoleSystem, Content: prompt}
 	return append([]core.Message{sys}, history...)
+}
+
+// runHITLApproval calls the configured HITL gateway for each tool call.
+// Returns approved calls (to be dispatched) and rejected messages (pre-built tool result messages).
+func (a *Agent) runHITLApproval(ctx context.Context, sessionID string, iter int, calls []core.ToolCall) (approved []core.ToolCall, rejected []core.Message) {
+	for i := range calls {
+		tc := calls[i]
+		req := hitl.ApprovalRequest{
+			SessionID: sessionID,
+			Iteration: iter,
+			ToolName:  tc.Name,
+			ToolInput: tc.Input,
+		}
+
+		a.debug(ctx, DebugEvent{Kind: DebugHITLRequest, ToolCall: &tc, Iteration: iter})
+
+		resp, err := a.cfg.hitlGateway.RequestApproval(ctx, req)
+		if err != nil {
+			a.cfg.logger.WarnContext(ctx, "agent: HITL approval error",
+				slog.String("tool", tc.Name),
+				slog.String("error", err.Error()),
+			)
+			override := fmt.Sprintf("HITL approval error: %v", err)
+			a.debug(ctx, DebugEvent{Kind: DebugHITLResponse, ToolCall: &tc, Iteration: iter, ToolOutput: "approved=false"})
+			rejected = append(rejected, core.Message{
+				Role:       core.RoleTool,
+				Content:    override,
+				ToolCallID: tc.ID,
+				Name:       tc.Name,
+			})
+			continue
+		}
+
+		approvedStr := "approved=true"
+		if !resp.Approved {
+			approvedStr = "approved=false"
+		}
+		a.debug(ctx, DebugEvent{Kind: DebugHITLResponse, ToolCall: &tc, Iteration: iter, ToolOutput: approvedStr})
+
+		if resp.Approved {
+			approved = append(approved, tc)
+		} else {
+			override := resp.Override
+			if override == "" {
+				override = "Action not approved."
+			}
+			a.cfg.logger.InfoContext(ctx, "agent: tool rejected by HITL",
+				slog.String("tool", tc.Name),
+				slog.String("override", override),
+			)
+			rejected = append(rejected, core.Message{
+				Role:       core.RoleTool,
+				Content:    override,
+				ToolCallID: tc.ID,
+				Name:       tc.Name,
+			})
+		}
+	}
+	return approved, rejected
 }
 
 // buildToolDefs extracts ToolDefinition from all registered tools (static + MCP).

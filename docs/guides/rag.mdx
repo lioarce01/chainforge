@@ -1,0 +1,148 @@
+---
+title: RAG (Retrieval-Augmented Generation)
+description: Ingest documents, chunk, embed, and retrieve relevant context before each LLM call.
+---
+
+RAG grounds LLM answers in real data by retrieving relevant document chunks and injecting them into the prompt. chainforge provides two integration patterns: **auto-retrieval** (always injects context) and **tool-based retrieval** (LLM calls retrieval explicitly).
+
+## Core types
+
+| Type | Role |
+|---|---|
+| `rag.Document` | A text chunk with ID, Content, Source, and Metadata |
+| `rag.Retriever` | Interface: `Retrieve(ctx, query, topK) ([]Document, error)` |
+| `rag.Ingestor` | Splits documents and stores them via a `DocumentStorer` |
+| `rag.QdrantRetriever` | Retriever backed by Qdrant semantic search |
+| `rag.QdrantIngestor` | Storer that writes chunks into Qdrant |
+| `rag.NewRetrieverTool` | Wraps a `Retriever` as a `core.Tool` for LLM-driven retrieval |
+
+## Loading documents
+
+```go
+import "github.com/lioarce01/chainforge/pkg/rag/loader"
+
+// Single file (.txt, .md, .json, .html)
+docs, err := loader.LoadFile("handbook.md")
+
+// All .txt files in a directory
+docs, err := loader.LoadDir("./docs", "*.txt")
+
+// HTML with automatic tag stripping
+docs, err := loader.LoadHTMLFile("page.html")
+
+// PDF (heuristic text extraction)
+docs, err := loader.LoadPDF("report.pdf")
+```
+
+## Chunking / Splitting
+
+Two built-in splitters:
+
+```go
+import "github.com/lioarce01/chainforge/pkg/rag/splitter"
+
+// Fixed-size chunks (fast, predictable)
+s := splitter.NewFixedSizeSplitter(512, 64)   // 512-rune chunks, 64-rune overlap
+
+// Recursive: tries paragraph → line → sentence → word → character
+s := splitter.NewRecursiveCharacterSplitter(512, 64)
+```
+
+Implement `splitter.Splitter` to use a custom strategy with `rag.WithSplitter(s)`.
+
+## Ingesting into Qdrant
+
+```go
+import (
+    "github.com/lioarce01/chainforge/pkg/memory/qdrant"
+    "github.com/lioarce01/chainforge/pkg/memory/qdrant/embedders"
+    "github.com/lioarce01/chainforge/pkg/rag"
+)
+
+// 1. Create a Qdrant store and embedder.
+embedder := embedders.OpenAI(apiKey)
+store, _ := qdrant.New(
+    qdrant.WithURL("localhost:6334"),
+    qdrant.WithCollectionName("kb"),
+    qdrant.WithEmbedder(embedder),
+)
+
+// 2. Build the ingestor.
+qIngestor := rag.NewQdrantIngestor(store, embedder)
+ingestor  := rag.NewIngestor(qIngestor)
+
+// 3. Load and ingest.
+docs, _ := loader.LoadFile("handbook.pdf")
+ingestor.Ingest(ctx, "kb", docs,
+    rag.WithChunkSize(512),
+    rag.WithChunkOverlap(64),
+)
+```
+
+`sessionID` (here `"kb"`) is the namespace. Use the same ID when retrieving.
+
+## Pattern 1 — Auto-retrieval (`WithRetriever`)
+
+The agent automatically retrieves context before every LLM call and appends it to the system prompt. Best for Q&A chatbots where every question benefits from background knowledge.
+
+```go
+retriever := rag.NewQdrantRetriever(store, embedder, "kb")
+
+agent, _ := chainforge.NewAgent(
+    chainforge.WithAnthropic(key, "claude-sonnet-4-6"),
+    chainforge.WithSystemPrompt("Answer using the provided context."),
+    chainforge.WithRetriever(retriever, rag.WithTopK(5)),
+)
+
+result, _ := agent.Run(ctx, "session-1", "What is our refund policy?")
+```
+
+The retrieved documents are formatted as `Relevant context:\n[1] Source: ...\n...` and appended to the system prompt before the first iteration.
+
+## Pattern 2 — Tool-based retrieval (`RetrieverTool`)
+
+The LLM decides when to retrieve. Best for agents with multiple tools where retrieval is conditional.
+
+```go
+retriever := rag.NewQdrantRetriever(store, embedder, "kb")
+
+agent, _ := chainforge.NewAgent(
+    chainforge.WithAnthropic(key, "claude-sonnet-4-6"),
+    chainforge.WithTools(
+        rag.NewRetrieverTool(retriever, rag.WithTopK(5)),
+        // ... other tools
+    ),
+)
+```
+
+The LLM can call `retriever_tool` with `{"query": "..."}` to fetch context on-demand.
+
+## Custom Retriever
+
+Implement `rag.Retriever` to connect any vector database:
+
+```go
+type MyRetriever struct{ ... }
+
+func (r *MyRetriever) Retrieve(ctx context.Context, query string, topK int) ([]rag.Document, error) {
+    // search your vector store, return []rag.Document
+}
+```
+
+## `core.Embedder` interface
+
+All embedders satisfy `core.Embedder`:
+
+```go
+type Embedder interface {
+    Embed(ctx context.Context, text string) ([]float32, error)
+    Dims() uint64
+}
+```
+
+Built-in implementations: `embedders.OpenAI(apiKey)`, `embedders.Ollama(host, model, dims)`.
+
+## See also
+
+- [Vector Memory](/guides/vector-memory) — using Qdrant as a conversation memory store
+- [Tools](/guides/tools) — adding the RetrieverTool alongside other tools

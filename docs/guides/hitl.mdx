@@ -1,0 +1,157 @@
+---
+title: Human-in-the-Loop (HITL)
+description: Gate tool calls behind human approval before execution. Required for regulated environments and agentic actions with side-effects.
+---
+
+HITL adds an approval gate between "the LLM requests a tool call" and "the tool executes". A **Gateway** intercepts every tool call, decides whether to approve or reject, and — on rejection — returns an override message to the LLM so the conversation continues cleanly.
+
+## Core types
+
+```go
+type ApprovalRequest struct {
+    SessionID string
+    Iteration int
+    ToolName  string
+    ToolInput string // raw JSON
+}
+
+type ApprovalResponse struct {
+    Approved bool
+    Override string // returned to LLM when Approved=false; default: "Action not approved."
+}
+
+type Gateway interface {
+    RequestApproval(ctx context.Context, req ApprovalRequest) (ApprovalResponse, error)
+}
+```
+
+## Enabling HITL
+
+```go
+agent, _ := chainforge.NewAgent(
+    chainforge.WithProvider(p),
+    chainforge.WithTools(emailTool, deleteTool),
+    chainforge.WithHITLGateway(myGateway),
+)
+```
+
+Every tool call goes through `myGateway.RequestApproval` before execution.
+
+## Gateway implementations
+
+### `hitl.AlwaysApprove`
+
+Auto-approves every tool call. Useful in testing or trusted environments.
+
+```go
+chainforge.WithHITLGateway(hitl.AlwaysApprove)
+```
+
+### `hitl.NewFuncGateway`
+
+Inline function — simplest integration:
+
+```go
+chainforge.WithHITLGateway(hitl.NewFuncGateway(
+    func(ctx context.Context, req hitl.ApprovalRequest) (hitl.ApprovalResponse, error) {
+        fmt.Printf("Approve %s? [y/n] ", req.ToolName)
+        var s string
+        fmt.Scan(&s)
+        return hitl.ApprovalResponse{Approved: s == "y"}, nil
+    },
+))
+```
+
+### `hitl.NewCLIGateway`
+
+Prompts on stdout, reads from stdin:
+
+```go
+chainforge.WithHITLGateway(hitl.NewCLIGateway(os.Stdout, os.Stdin))
+```
+
+### `hitl.NewChannelGateway`
+
+Channel-based — ideal for HTTP servers, UIs, or test harnesses:
+
+```go
+requests  := make(chan hitl.ApprovalRequest)
+responses := make(chan hitl.ApprovalResponse)
+
+// Approval loop (runs in a goroutine — could be an HTTP handler, UI, etc.)
+go func() {
+    for req := range requests {
+        // examine req.ToolName, req.ToolInput, req.SessionID
+        responses <- hitl.ApprovalResponse{Approved: true}
+    }
+}()
+
+chainforge.WithHITLGateway(hitl.NewChannelGateway(requests, responses))
+```
+
+## Filtering which tools require approval
+
+### `hitl.OnlyTools` — only named tools go through the gateway
+
+```go
+// Only intercept destructive tools; read-only tools auto-approve.
+hitl.OnlyTools(hitl.NewCLIGateway(os.Stdout, os.Stdin), "send_email", "delete_file")
+```
+
+### `hitl.ExcludeTools` — all tools except named ones go through the gateway
+
+```go
+// Skip approval for safe read-only tools.
+hitl.ExcludeTools(hitl.NewCLIGateway(os.Stdout, os.Stdin), "read_file", "search")
+```
+
+## Override messages
+
+When a gateway rejects a tool call, the `Override` string is returned to the LLM as the tool's result. The LLM then continues the conversation with this information.
+
+```go
+hitl.ApprovalResponse{
+    Approved: false,
+    Override: "This action requires manager approval. Please escalate.",
+}
+```
+
+If `Override` is empty, the default `"Action not approved."` is used.
+
+## Debug events
+
+HITL emits two debug events observable via `WithDebugHandler`:
+
+| Kind | When | Fields set |
+|---|---|---|
+| `DebugHITLRequest` | Before gateway is called | `ToolCall`, `Iteration` |
+| `DebugHITLResponse` | After gateway returns | `ToolCall`, `Iteration`, `ToolOutput` (`"approved=true/false"`) |
+
+```go
+chainforge.WithDebugHandler(func(_ context.Context, ev chainforge.DebugEvent) {
+    if ev.Kind == chainforge.DebugHITLRequest {
+        log.Printf("HITL: requesting approval for %s", ev.ToolCall.Name)
+    }
+    if ev.Kind == chainforge.DebugHITLResponse {
+        log.Printf("HITL: %s — %s", ev.ToolCall.Name, ev.ToolOutput)
+    }
+})
+```
+
+## Partial approval (multiple tools)
+
+When the LLM requests multiple tools in one turn, each is evaluated independently. Approved tools execute normally; rejected tools receive their override message. Both results are merged into history before the next LLM call.
+
+## Custom gateway
+
+Implement `hitl.Gateway` for any approval system (database, Slack, PagerDuty, etc.):
+
+```go
+type MyGateway struct{ db *sql.DB }
+
+func (g *MyGateway) RequestApproval(ctx context.Context, req hitl.ApprovalRequest) (hitl.ApprovalResponse, error) {
+    // Write pending approval to DB, wait for human to act...
+    approved, err := g.waitForDecision(ctx, req)
+    return hitl.ApprovalResponse{Approved: approved}, err
+}
+```

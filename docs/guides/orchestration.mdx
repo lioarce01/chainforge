@@ -201,3 +201,22 @@ for event := range stream {
     }
 }
 ```
+
+## Human-in-the-Loop (HITL)
+
+HITL gates tool calls behind human approval. Use it alongside any orchestration pattern — each individual agent can have its own HITL gateway:
+
+```go
+import "github.com/lioarce01/chainforge/pkg/hitl"
+
+// Only intercept destructive tools.
+gw := hitl.OnlyTools(hitl.NewCLIGateway(os.Stdout, os.Stdin), "send_email", "delete_file")
+
+agent, _ := chainforge.NewAgent(
+    chainforge.WithProvider(p),
+    chainforge.WithTools(emailTool, searchTool),
+    chainforge.WithHITLGateway(gw),
+)
+```
+
+See the [HITL guide](/guides/hitl) for all gateway implementations and patterns.

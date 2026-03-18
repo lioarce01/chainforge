@@ -175,3 +175,7 @@ The result is always `maxHistory` messages: one summary + `maxHistory-1` recent.
 ## Multi-agent memory isolation
 
 The orchestrator automatically namespaces session IDs per step (`"sessionID:step-N"`), so each agent in a sequential pipeline has isolated history.
+
+## Semantic retrieval (RAG)
+
+For semantic search over a knowledge base — not just conversation history — see the [RAG guide](/guides/rag). The RAG layer uses Qdrant as a vector store and exposes `rag.NewQdrantRetriever` and `rag.NewQdrantIngestor` built on the same `qdrant.Store` used for memory.

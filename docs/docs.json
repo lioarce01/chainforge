@@ -45,6 +45,8 @@
               "guides/mcp",
               "guides/memory",
               "guides/vector-memory",
+              "guides/rag",
+              "guides/hitl",
               "guides/orchestration",
               "guides/structured-output",
               "guides/presets",

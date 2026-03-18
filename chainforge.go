@@ -63,6 +63,9 @@ func validateConfig(cfg agentConfig) error {
 	if cfg.historySummarizer != nil && cfg.maxHistory <= 0 {
 		return fmt.Errorf("chainforge: WithHistorySummarizer requires WithMaxHistory to be set to a positive value")
 	}
+	if cfg.retriever != nil && cfg.retrieverTopK <= 0 {
+		cfg.retrieverTopK = 5 // apply default silently
+	}
 	// Tool validation: names must be non-empty, valid, and unique; schemas must be valid JSON.
 	seen := make(map[string]bool, len(cfg.tools))
 	for _, t := range cfg.tools {

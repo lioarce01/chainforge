@@ -201,6 +201,26 @@ A zero TTL behaves identically to `NewCachedTool` — entries never expire. Cach
 
 Tool execution errors are **non-fatal**. The error string is returned to the LLM as the tool result so the model can observe and handle it — the agent loop continues.
 
+## RetrieverTool — LLM-driven RAG
+
+Wrap any `rag.Retriever` as a `core.Tool` so the LLM can call retrieval explicitly:
+
+```go
+import "github.com/lioarce01/chainforge/pkg/rag"
+
+retriever := rag.NewQdrantRetriever(store, embedder, "kb")
+
+agent, _ := chainforge.NewAgent(
+    chainforge.WithAnthropic(key, "claude-sonnet-4-6"),
+    chainforge.WithTools(
+        rag.NewRetrieverTool(retriever, rag.WithTopK(5)),
+        // ... other tools
+    ),
+)
+```
+
+The LLM can call `retriever_tool` with `{"query": "..."}` to fetch relevant context on demand. For automatic injection on every turn, use `chainforge.WithRetriever` instead. See the [RAG guide](/guides/rag).
+
 ## MCP servers
 
 Connect any MCP server and its tools are discovered automatically. See the [MCP guide](/guides/mcp).
