@@ -45,7 +45,8 @@
               "guides/mcp",
               "guides/memory",
               "guides/vector-memory",
-              "guides/orchestration"
+              "guides/orchestration",
+              "guides/structured-output"
             ]
           },
           {

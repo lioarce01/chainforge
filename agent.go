@@ -12,6 +12,7 @@ import (
 
 	"github.com/lioarce01/chainforge/pkg/core"
 	mcppkg "github.com/lioarce01/chainforge/pkg/mcp"
+	"github.com/lioarce01/chainforge/pkg/structured"
 	"github.com/lioarce01/chainforge/pkg/tools"
 )
 
@@ -118,6 +119,9 @@ func (a *Agent) RunWithUsage(ctx context.Context, sessionID, userMessage string)
 		return "", core.Usage{}, fmt.Errorf("agent: MCP connect: %w", err)
 	}
 
+	// Inject session ID into context so middleware (tracing, logging) can correlate.
+	ctx = core.WithSessionID(ctx, sessionID)
+
 	// Load history from memory
 	history, err := a.loadHistory(ctx, sessionID)
 	if err != nil {
@@ -183,6 +187,11 @@ func (a *Agent) RunWithUsage(ctx context.Context, sessionID, userMessage string)
 				slog.Int("output_tokens", totalUsage.OutputTokens),
 				slog.Int("iterations", i+1),
 			)
+			if len(a.cfg.outputSchema) > 0 {
+				if err := structured.ValidateJSON(resp.Message.Content, a.cfg.outputSchema); err != nil {
+					return "", totalUsage, fmt.Errorf("%w: %v", ErrInvalidOutput, err)
+				}
+			}
 			return resp.Message.Content, totalUsage, nil
 
 		case core.StopReasonToolUse:
@@ -246,6 +255,9 @@ func (a *Agent) RunStream(ctx context.Context, sessionID, userMessage string) <-
 			})
 			return
 		}
+
+		// Inject session ID into context so middleware can correlate.
+		ctx = core.WithSessionID(ctx, sessionID)
 
 		history, err := a.loadHistory(ctx, sessionID)
 		if err != nil {
@@ -494,15 +506,25 @@ func (a *Agent) loadHistory(ctx context.Context, sessionID string) ([]core.Messa
 }
 
 // prependSystem ensures the system prompt is the first message if configured.
+// If WithStructuredOutput is set, a JSON schema hint is appended to the prompt.
 func (a *Agent) prependSystem(history []core.Message) []core.Message {
-	if a.cfg.systemPrompt == "" {
+	prompt := a.cfg.systemPrompt
+	if len(a.cfg.outputSchema) > 0 {
+		hint := "Respond only with valid JSON matching the following schema: " + string(a.cfg.outputSchema)
+		if prompt == "" {
+			prompt = hint
+		} else {
+			prompt = prompt + "\n\n" + hint
+		}
+	}
+	if prompt == "" {
 		return history
 	}
 	// Check if already present (avoids duplication on repeated calls)
 	if len(history) > 0 && history[0].Role == core.RoleSystem {
 		return history
 	}
-	sys := core.Message{Role: core.RoleSystem, Content: a.cfg.systemPrompt}
+	sys := core.Message{Role: core.RoleSystem, Content: prompt}
 	return append([]core.Message{sys}, history...)
 }
 

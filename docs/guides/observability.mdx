@@ -108,11 +108,39 @@ agent, _ := chainforge.NewAgent(
 
 | Span name | Attributes |
 |---|---|
-| `chainforge.provider.chat` | provider, model, messages, stop_reason, input_tokens, output_tokens |
-| `chainforge.provider.chat_stream` | provider, model, messages, stop_reason, input_tokens, output_tokens |
+| `chainforge.provider.chat` | provider, model, messages, session_id (auto), stop_reason, input_tokens, output_tokens |
+| `chainforge.provider.chat_stream` | provider, model, messages, session_id (auto), stop_reason, input_tokens, output_tokens |
 | `chainforge.memory.get` | session_id, message_count |
 | `chainforge.memory.append` | session_id, message_count |
 | `chainforge.memory.clear` | session_id |
+
+The `session_id` attribute is injected automatically by the agent loop before every provider call — no user action required.
+
+### Custom span attributes
+
+Use `WithTraceAttributes` to append arbitrary attributes to every span. The function receives the call context, allowing extraction of request-scoped values:
+
+```go
+import (
+    "go.opentelemetry.io/otel/attribute"
+    chainforge "github.com/lioarce01/chainforge"
+)
+
+agent, _ := chainforge.NewAgent(
+    chainforge.WithProvider(p),
+    chainforge.WithModel("claude-sonnet-4-6"),
+    chainforge.WithTracing(),
+    chainforge.WithTraceAttributes(func(ctx context.Context) []attribute.KeyValue {
+        return []attribute.KeyValue{
+            attribute.String("user_id",  userIDFromCtx(ctx)),
+            attribute.String("tenant",   tenantFromCtx(ctx)),
+            attribute.String("session",  chainforge.SessionIDFromContext(ctx)),
+        }
+    }),
+)
+```
+
+`WithTraceAttributes` has no effect when `WithTracing` is not set.
 
 ### Streaming span lifecycle
 
@@ -175,6 +203,45 @@ p := chainforge.NewProviderBuilder(provider).
 | `chainforge_provider_tokens_total` | Counter | `provider`, `token_type` (`input`\|`output`) | From `Usage` in the response or `Done` stream event |
 
 For `ChatStream`, all three metrics are recorded **after the channel is fully drained**, not at stream-open time.
+
+### Per-tool metrics
+
+Wrap individual tools to record per-tool latency and call counts:
+
+```go
+import "github.com/lioarce01/chainforge/pkg/middleware/metrics"
+
+reg := prometheus.NewRegistry() // or prometheus.DefaultRegisterer
+
+// Share metric vectors across all tools in one agent.
+toolReg, err := metrics.NewToolRegistry(reg)
+if err != nil { ... }
+
+agent, _ := chainforge.NewAgent(
+    chainforge.WithProvider(p),
+    chainforge.WithModel("claude-sonnet-4-6"),
+    chainforge.WithTools(
+        toolReg.Wrap(myTool),
+        toolReg.Wrap(anotherTool),
+    ),
+)
+```
+
+| Metric | Type | Labels |
+|---|---|---|
+| `chainforge_tool_calls_total` | Counter | `tool`, `status` (`ok`\|`error`) |
+| `chainforge_tool_duration_seconds` | Histogram | `tool` |
+
+Useful PromQL queries:
+
+```promql
+# Error rate per tool
+rate(chainforge_tool_calls_total{status="error"}[5m])
+  / rate(chainforge_tool_calls_total[5m])
+
+# p99 tool latency
+histogram_quantile(0.99, rate(chainforge_tool_duration_seconds_bucket[5m]))
+```
 
 ## Server logs
 

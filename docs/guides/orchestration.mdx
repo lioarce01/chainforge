@@ -126,6 +126,48 @@ router := orchestrator.NewLLMRouter(supervisor,
 )
 ```
 
+## Conditional branching
+
+Run different agents depending on a predicate applied to the input:
+
+```go
+result, err := orchestrator.Conditional(
+    ctx, "session",
+    userMessage,
+    func(input string) bool {
+        return strings.Contains(strings.ToLower(input), "code")
+    },
+    coderAgent,   // runs when predicate is true
+    generalAgent, // runs when predicate is false (pass nil for a no-op)
+)
+```
+
+Sessions are namespaced as `sessionID:if` and `sessionID:else` so each branch maintains independent memory.
+
+Passing `nil` as the else-agent returns the original `input` unchanged when the predicate is false.
+
+## Loops
+
+Repeatedly run an agent while a condition holds, up to a maximum iteration count:
+
+```go
+result, err := orchestrator.Loop(
+    ctx, "session",
+    initialInput,
+    refineAgent, // receives previous output as next input
+    func(iter int, output string) bool {
+        // Keep refining until the output is "good enough".
+        return !strings.Contains(output, "DONE") && iter < 5
+    },
+    10, // hard cap — loop stops after 10 iterations regardless
+)
+```
+
+- The condition function receives the current iteration index (0-based) and the latest output.
+- Each iteration runs under session `sessionID:loop-N` for isolated history.
+- When `maxIter` is exhausted the loop exits with the last output (no error).
+- Context cancellation propagates immediately from the inner agent call.
+
 ## Streaming
 
 Use `RunStream` for real-time output:

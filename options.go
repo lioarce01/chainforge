@@ -1,8 +1,12 @@
 package chainforge
 
 import (
+	"context"
+	"encoding/json"
 	"log/slog"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/lioarce01/chainforge/pkg/core"
 	mcppkg "github.com/lioarce01/chainforge/pkg/mcp"
@@ -30,6 +34,8 @@ type agentConfig struct {
 	runTimeout       time.Duration // 0 = no timeout
 	streamBufSize    int           // RunStream channel buffer capacity (default: 16)
 	toolConcurrency  int           // 0 = unlimited concurrent tool goroutines
+	traceAttrs       func(context.Context) []attribute.KeyValue // extra OTel span attrs; may be nil
+	outputSchema     json.RawMessage                            // if set, validate LLM output as JSON
 }
 
 func defaultConfig() agentConfig {
@@ -169,12 +175,38 @@ func WithGemini(apiKey, model string) AgentOption {
 // Each Chat call becomes a span; ChatStream spans cover the full stream duration.
 // If InitTracerProvider has not been called, the global noop tracer is used — no error.
 // Applied after all options are resolved, so order relative to WithProvider does not matter.
+//
+// Spans automatically include session_id when the agent loop injects it. Add
+// further per-call attributes with WithTraceAttributes.
 func WithTracing() AgentOption {
 	return func(c *agentConfig) {
 		c.providerWrappers = append(c.providerWrappers, func(p core.Provider) core.Provider {
-			return cfotel.NewTracedProvider(p, cfotel.Tracer())
+			// c.traceAttrs is read here — after all options have been applied —
+			// so WithTraceAttributes works regardless of declaration order.
+			return cfotel.NewTracedProviderWithAttrs(p, cfotel.Tracer(), c.traceAttrs)
 		})
 	}
+}
+
+// WithTraceAttributes registers a function that returns extra OpenTelemetry
+// span attributes for every Chat and ChatStream call. The function receives
+// the call context so it can extract request-scoped values (e.g. user ID,
+// tenant, session ID via chainforge.SessionIDFromContext).
+//
+// Use alongside WithTracing; has no effect if WithTracing is not set.
+func WithTraceAttributes(fn func(context.Context) []attribute.KeyValue) AgentOption {
+	return func(c *agentConfig) { c.traceAttrs = fn }
+}
+
+// WithStructuredOutput instructs the agent to validate every final LLM response
+// against schema (a JSON Schema object as raw JSON). If the response is not
+// valid JSON, or its top-level type does not match the schema's "type" field,
+// the agent returns ErrInvalidOutput.
+//
+// When set, the system prompt is automatically augmented with a hint asking the
+// LLM to respond with valid JSON matching the schema.
+func WithStructuredOutput(schema json.RawMessage) AgentOption {
+	return func(c *agentConfig) { c.outputSchema = schema }
 }
 
 // WithStreamBufferSize sets the RunStream channel buffer capacity (default: 16).

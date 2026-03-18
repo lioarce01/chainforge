@@ -1,0 +1,73 @@
+---
+title: Structured Output
+description: Enforce JSON responses and validate against a schema.
+---
+
+Use `WithStructuredOutput` to instruct the agent to respond with valid JSON matching a declared schema. The agent validates every final response and returns `ErrInvalidOutput` if the content is not conformant.
+
+## Quick start
+
+```go
+import (
+    "encoding/json"
+    chainforge "github.com/lioarce01/chainforge"
+)
+
+// Declare the expected output schema.
+schema := json.RawMessage(`{
+    "type": "object",
+    "properties": {
+        "answer": {"type": "string"},
+        "confidence": {"type": "number"}
+    },
+    "required": ["answer", "confidence"]
+}`)
+
+agent, _ := chainforge.NewAgent(
+    chainforge.WithProvider(p),
+    chainforge.WithModel("claude-sonnet-4-6"),
+    chainforge.WithStructuredOutput(schema),
+)
+
+result, err := agent.Run(ctx, "session-1", "What is the capital of France?")
+if err != nil {
+    // errors.Is(err, chainforge.ErrInvalidOutput) if the LLM didn't return valid JSON
+}
+
+// result is a valid JSON string matching the schema.
+var out struct {
+    Answer     string  `json:"answer"`
+    Confidence float64 `json:"confidence"`
+}
+json.Unmarshal([]byte(result), &out)
+```
+
+## How it works
+
+1. A system prompt hint is automatically appended asking the LLM to respond with valid JSON matching the schema.
+2. After each final response (stop reason `end_turn` / `stop`), the content is validated:
+   - Is it valid JSON?
+   - Does its top-level type match the schema's `"type"` field (if declared)?
+3. If validation fails, `Run` and `RunWithUsage` return an error wrapping `chainforge.ErrInvalidOutput`.
+
+```go
+if errors.Is(err, chainforge.ErrInvalidOutput) {
+    // LLM returned something that doesn't match the schema.
+    // Log the failure, retry with a clarifying prompt, or fall back.
+}
+```
+
+## Validation scope
+
+The built-in validator checks:
+
+| Check | Description |
+|---|---|
+| Valid JSON | The response can be parsed as JSON. |
+| Top-level type | If schema declares `"type": "object"`, the response must be a JSON object (`{...}`). Same for array, string, number, boolean, null. |
+
+It does **not** validate nested properties or required fields — those are enforced by prompting. For full JSON Schema Draft-07 validation, use an external library such as `github.com/santhosh-tekuri/jsonschema/v5` on the returned string.
+
+## Combining with tools
+
+`WithStructuredOutput` only validates the **final** text response. Tool call results are not validated. This means multi-step agentic loops work normally; the schema check runs only when the LLM produces a terminal response.

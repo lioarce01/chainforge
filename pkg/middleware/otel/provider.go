@@ -10,11 +10,14 @@ import (
 	"github.com/lioarce01/chainforge/pkg/core"
 )
 
+
+
 // TracedProvider wraps a core.Provider with OpenTelemetry spans.
 // It accepts a trace.Tracer so callers can inject a noop tracer in tests.
 type TracedProvider struct {
-	inner  core.Provider
-	tracer trace.Tracer
+	inner      core.Provider
+	tracer     trace.Tracer
+	extraAttrs func(context.Context) []attribute.KeyValue // may be nil
 }
 
 // NewTracedProvider wraps p with OTel tracing using tracer.
@@ -22,17 +25,31 @@ func NewTracedProvider(p core.Provider, tracer trace.Tracer) *TracedProvider {
 	return &TracedProvider{inner: p, tracer: tracer}
 }
 
+// NewTracedProviderWithAttrs wraps p with OTel tracing and appends extra
+// attributes to every span via the provided function. attrs may be nil.
+func NewTracedProviderWithAttrs(p core.Provider, tracer trace.Tracer, attrs func(context.Context) []attribute.KeyValue) *TracedProvider {
+	return &TracedProvider{inner: p, tracer: tracer, extraAttrs: attrs}
+}
+
 // Name delegates to the wrapped provider.
 func (t *TracedProvider) Name() string { return t.inner.Name() }
 
 // Chat creates a span that covers the full synchronous call.
 func (t *TracedProvider) Chat(ctx context.Context, req core.ChatRequest) (core.ChatResponse, error) {
+	attrs := []attribute.KeyValue{
+		attribute.String("provider", t.inner.Name()),
+		attribute.String("model", req.Model),
+		attribute.Int("messages", len(req.Messages)),
+	}
+	if sid := core.SessionIDFromContext(ctx); sid != "" {
+		attrs = append(attrs, attribute.String("session_id", sid))
+	}
+	if t.extraAttrs != nil {
+		attrs = append(attrs, t.extraAttrs(ctx)...)
+	}
+
 	ctx, span := t.tracer.Start(ctx, "chainforge.provider.chat",
-		trace.WithAttributes(
-			attribute.String("provider", t.inner.Name()),
-			attribute.String("model", req.Model),
-			attribute.Int("messages", len(req.Messages)),
-		),
+		trace.WithAttributes(attrs...),
 	)
 	defer span.End()
 
@@ -56,12 +73,20 @@ func (t *TracedProvider) Chat(ctx context.Context, req core.ChatRequest) (core.C
 // The span is ended by an interceptor goroutine after all events are drained,
 // capturing the true end-to-end streaming latency.
 func (t *TracedProvider) ChatStream(ctx context.Context, req core.ChatRequest) (<-chan core.StreamEvent, error) {
+	attrs := []attribute.KeyValue{
+		attribute.String("provider", t.inner.Name()),
+		attribute.String("model", req.Model),
+		attribute.Int("messages", len(req.Messages)),
+	}
+	if sid := core.SessionIDFromContext(ctx); sid != "" {
+		attrs = append(attrs, attribute.String("session_id", sid))
+	}
+	if t.extraAttrs != nil {
+		attrs = append(attrs, t.extraAttrs(ctx)...)
+	}
+
 	ctx, span := t.tracer.Start(ctx, "chainforge.provider.chat_stream",
-		trace.WithAttributes(
-			attribute.String("provider", t.inner.Name()),
-			attribute.String("model", req.Model),
-			attribute.Int("messages", len(req.Messages)),
-		),
+		trace.WithAttributes(attrs...),
 	)
 
 	inner, err := t.inner.ChatStream(ctx, req)
