@@ -21,22 +21,23 @@ import (
 )
 
 const (
-	openRouterBaseURL    = "https://openrouter.ai/api/v1"
-	openRouterModel      = "openrouter/hunter-alpha"
-	openRouterDefaultKey = "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"
+	openRouterBaseURL = "https://openrouter.ai/api/v1"
+	openRouterModel   = "openrouter/hunter-alpha"
 )
 
-func openRouterKey() string {
-	if k := os.Getenv("OPENROUTER_API_KEY"); k != "" {
-		return k
+func openRouterKey(t *testing.T) string {
+	t.Helper()
+	k := os.Getenv("OPENROUTER_API_KEY")
+	if k == "" {
+		t.Skip("OPENROUTER_API_KEY not set")
 	}
-	return openRouterDefaultKey
+	return k
 }
 
 func newOpenRouterAgent(t *testing.T, opts ...chainforge.AgentOption) *chainforge.Agent {
 	t.Helper()
 	base := []chainforge.AgentOption{
-		chainforge.WithProvider(openai.NewWithBaseURL(openRouterKey(), openRouterBaseURL, "openrouter")),
+		chainforge.WithProvider(openai.NewWithBaseURL(openRouterKey(t), openRouterBaseURL, "openrouter")),
 		chainforge.WithModel(openRouterModel),
 		chainforge.WithMaxTokens(512),
 		chainforge.WithRunTimeout(60 * time.Second),
@@ -229,7 +230,7 @@ func TestOpenRouter_Preset_Chatbot_Memory(t *testing.T) {
 	mem := inmemory.New()
 
 	agent, err := preset.Chatbot(
-		openai.NewWithBaseURL(openRouterKey(), openRouterBaseURL, "openrouter"),
+		openai.NewWithBaseURL(openRouterKey(t), openRouterBaseURL, "openrouter"),
 		openRouterModel,
 		preset.ChatbotConfig{
 			SystemPrompt: "You are a helpful assistant. Be concise.",
@@ -264,7 +265,7 @@ func TestOpenRouter_Preset_Chatbot_Memory(t *testing.T) {
 
 func TestOpenRouter_Preset_ToolAgent(t *testing.T) {
 	agent, err := preset.ToolAgent(
-		openai.NewWithBaseURL(openRouterKey(), openRouterBaseURL, "openrouter"),
+		openai.NewWithBaseURL(openRouterKey(t), openRouterBaseURL, "openrouter"),
 		openRouterModel,
 		preset.ToolAgentConfig{
 			SystemPrompt:  "You are a math assistant. Always use the calculator tool for arithmetic.",
