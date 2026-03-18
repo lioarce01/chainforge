@@ -41,16 +41,17 @@ func TestOpenRouter_Sequential_TwoStep(t *testing.T) {
 }
 
 func TestOpenRouter_Sequential_TemplateInterpolation(t *testing.T) {
-	// Step 1 output is injected into step 2 via {{.previous}} template.
+	// Step 1 extracts a city from the input.
+	// Step 2 receives {{.previous}} (the city) via template and returns its country.
 	step1 := newOpenRouterAgent(t,
-		chainforge.WithSystemPrompt("Reply with only the word: Paris"),
+		chainforge.WithSystemPrompt("Extract the city name from the message. Reply with only the city name, nothing else."),
 	)
 	step2 := newOpenRouterAgent(t,
-		chainforge.WithSystemPrompt("Reply with only the country of the city mentioned in the input."),
+		chainforge.WithSystemPrompt("Reply with only the country name of the given city, nothing else."),
 	)
 
 	result, err := orchestrator.Sequential(context.Background(), "or-seq-tmpl",
-		"ignored",
+		"The Eiffel Tower is in Paris.",
 		orchestrator.StepOf("city", step1),
 		orchestrator.StepOf("country", step2, "What country is {{.previous}} in?"),
 	)
@@ -161,49 +162,87 @@ func TestOpenRouter_LLMRouter_RoutesCorrectly(t *testing.T) {
 // --- Conditional ---
 
 func TestOpenRouter_Conditional_TrueBranch(t *testing.T) {
-	positiveAgent := newOpenRouterAgent(t,
-		chainforge.WithSystemPrompt("Reply with exactly: POSITIVE"),
+	// The real assertion is routing: predicate(true) → if-agent is invoked, else-agent is not.
+	var ifCalled, elseCalled bool
+
+	ifAgent := newOpenRouterAgent(t,
+		chainforge.WithSystemPrompt("You are a helpful assistant."),
+		chainforge.WithDebugHandler(func(_ context.Context, ev chainforge.DebugEvent) {
+			if ev.Kind == chainforge.DebugLLMRequest {
+				ifCalled = true
+			}
+		}),
 	)
-	negativeAgent := newOpenRouterAgent(t,
-		chainforge.WithSystemPrompt("Reply with exactly: NEGATIVE"),
+	elseAgent := newOpenRouterAgent(t,
+		chainforge.WithSystemPrompt("You are a helpful assistant."),
+		chainforge.WithDebugHandler(func(_ context.Context, ev chainforge.DebugEvent) {
+			if ev.Kind == chainforge.DebugLLMRequest {
+				elseCalled = true
+			}
+		}),
 	)
 
 	result, err := orchestrator.Conditional(
 		context.Background(), "or-cond-true",
 		"The sky is blue.",
 		func(input string) bool { return strings.Contains(strings.ToLower(input), "blue") },
-		positiveAgent,
-		negativeAgent,
+		ifAgent,
+		elseAgent,
 	)
 	if err != nil {
 		t.Fatalf("Conditional: %v", err)
 	}
-	if !strings.Contains(result, "POSITIVE") {
-		t.Errorf("expected POSITIVE branch result, got: %s", result)
+	if !ifCalled {
+		t.Error("if-agent was not called (predicate should be true)")
+	}
+	if elseCalled {
+		t.Error("else-agent should not have been called")
+	}
+	if result == "" {
+		t.Error("expected non-empty result")
 	}
 	t.Logf("result: %s", result)
 }
 
 func TestOpenRouter_Conditional_FalseBranch(t *testing.T) {
-	positiveAgent := newOpenRouterAgent(t,
-		chainforge.WithSystemPrompt("Reply with exactly: POSITIVE"),
+	// The real assertion is routing: predicate(false) → else-agent is invoked, if-agent is not.
+	var ifCalled, elseCalled bool
+
+	ifAgent := newOpenRouterAgent(t,
+		chainforge.WithSystemPrompt("You are a helpful assistant."),
+		chainforge.WithDebugHandler(func(_ context.Context, ev chainforge.DebugEvent) {
+			if ev.Kind == chainforge.DebugLLMRequest {
+				ifCalled = true
+			}
+		}),
 	)
-	negativeAgent := newOpenRouterAgent(t,
-		chainforge.WithSystemPrompt("Reply with exactly: NEGATIVE"),
+	elseAgent := newOpenRouterAgent(t,
+		chainforge.WithSystemPrompt("You are a helpful assistant."),
+		chainforge.WithDebugHandler(func(_ context.Context, ev chainforge.DebugEvent) {
+			if ev.Kind == chainforge.DebugLLMRequest {
+				elseCalled = true
+			}
+		}),
 	)
 
 	result, err := orchestrator.Conditional(
 		context.Background(), "or-cond-false",
 		"The sky is red.",
 		func(input string) bool { return strings.Contains(strings.ToLower(input), "blue") },
-		positiveAgent,
-		negativeAgent,
+		ifAgent,
+		elseAgent,
 	)
 	if err != nil {
 		t.Fatalf("Conditional: %v", err)
 	}
-	if !strings.Contains(result, "NEGATIVE") {
-		t.Errorf("expected NEGATIVE branch result, got: %s", result)
+	if ifCalled {
+		t.Error("if-agent should not have been called")
+	}
+	if !elseCalled {
+		t.Error("else-agent was not called (predicate should be false)")
+	}
+	if result == "" {
+		t.Error("expected non-empty result")
 	}
 	t.Logf("result: %s", result)
 }
