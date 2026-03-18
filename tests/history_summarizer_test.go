@@ -122,17 +122,10 @@ func TestHistorySummarizer_SkipsWhenUnderLimit(t *testing.T) {
 	}
 }
 
-// TestHistorySummarizer_NoMaxHistory verifies that without WithMaxHistory the
-// summarizer is never triggered.
-func TestHistorySummarizer_NoMaxHistory(t *testing.T) {
-	mem := inmemory.New()
-	ctx := context.Background()
-	sessionID := "no-maxhistory"
-
-	for i := 0; i < 10; i++ {
-		_ = mem.Append(ctx, sessionID, core.Message{Role: core.RoleUser, Content: "x"})
-	}
-
+// TestHistorySummarizer_RequiresMaxHistory verifies that NewAgent returns an
+// error when WithHistorySummarizer is set without WithMaxHistory — a silent
+// no-op that is always a misconfiguration.
+func TestHistorySummarizer_RequiresMaxHistory(t *testing.T) {
 	summarizerProvider := NewMockProvider(endTurnResponse("never"))
 	summarizer, _ := chainforge.NewAgent(
 		chainforge.WithProvider(summarizerProvider),
@@ -140,24 +133,14 @@ func TestHistorySummarizer_NoMaxHistory(t *testing.T) {
 	)
 
 	mainProvider := NewMockProvider(endTurnResponse("done"))
-	agent, err := chainforge.NewAgent(
+	_, err := chainforge.NewAgent(
 		chainforge.WithProvider(mainProvider),
 		chainforge.WithModel("mock"),
-		chainforge.WithMemory(mem),
-		// No WithMaxHistory — summarizer should be a no-op.
 		chainforge.WithHistorySummarizer(summarizer),
+		// WithMaxHistory intentionally omitted.
 	)
-	if err != nil {
-		t.Fatalf("NewAgent: %v", err)
-	}
-
-	_, err = agent.Run(ctx, sessionID, "test")
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	if summarizerProvider.CallCount() > 0 {
-		t.Error("summarizer must not fire when maxHistory is 0 (unlimited)")
+	if err == nil {
+		t.Error("expected NewAgent to return an error when WithHistorySummarizer is set without WithMaxHistory")
 	}
 }
 

@@ -16,12 +16,13 @@ result, err := orchestrator.Sequential(ctx, "session",
     "Golang concurrency patterns",
     orchestrator.StepOf("research", researchAgent, "Research this topic: {{.input}}"),
     orchestrator.StepOf("write",    writerAgent,   "Write a blog post based on: {{.previous}}"),
-    orchestrator.StepOf("review",   reviewAgent,   "Review and improve: {{.previous}}"),
+    orchestrator.StepOf("review",   reviewAgent),  // no template — passes previous output verbatim
 )
 ```
 
 - `{{.input}}` — the original input passed to `Sequential`
 - `{{.previous}}` — the output of the preceding step
+- The template argument is optional. Omitting it passes the previous step's output verbatim.
 - Step failures wrap the step name: `step "write": ...`
 
 ## Parallel fan-out
@@ -35,16 +36,31 @@ results, err := orchestrator.Parallel(ctx, "session",
     orchestrator.FanOf("summary", summaryAgent, "Summarize Go"),
 )
 
-for _, r := range results {
-    if r.Error != nil {
-        fmt.Printf("%s failed: %v\n", r.Name, r.Error)
-        continue
-    }
-    fmt.Printf("%s: %s\n", r.Name, r.Output)
+// Check for any branch error in one call:
+if err := results.FirstError(); err != nil {
+    log.Println("a branch failed:", err)
 }
+
+// Look up a branch by name:
+if r, ok := results.Get("pros"); ok {
+    fmt.Println("pros:", r.Output)
+}
+
+// Get a map of all successful outputs:
+outputs := results.Outputs() // map[string]string
 ```
 
-`Parallel` **always** returns all results — a failed branch never cancels siblings. Check `ParallelResult.Error` per result.
+`Parallel` **always** returns all results — a failed branch never cancels siblings.
+
+`ParallelResults` convenience methods:
+
+| Method | Description |
+|---|---|
+| `.Get(name)` | Returns the `ParallelResult` for a branch and whether it was found. |
+| `.FirstError()` | Returns the first non-nil branch error, or `nil` if all succeeded. |
+| `.Outputs()` | Returns `map[string]string` of branch name → output for successful branches only. |
+
+Existing `for _, r := range results` loops still compile — `ParallelResults` is `[]ParallelResult`.
 
 ## Router
 

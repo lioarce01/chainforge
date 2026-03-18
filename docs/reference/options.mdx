@@ -166,6 +166,8 @@ chainforge.NewAgent(
 | `ErrNoProvider` | `NewAgent` called without `WithProvider`. |
 | `ErrNoModel` | `NewAgent` called without `WithModel`. |
 | `ErrInvalidOutput` | `WithStructuredOutput` is set and the final LLM response fails JSON/schema validation. |
+| provider init error | `WithGemini` (or other provider shortcuts) failed to create the provider — now surfaces the original error at `NewAgent` time instead of returning `ErrNoProvider`. |
+| misconfiguration | `WithHistorySummarizer` without `WithMaxHistory` returns an error at `NewAgent` time. |
 
 ### Error constructors
 

@@ -45,6 +45,10 @@ func MustNewAgent(opts ...AgentOption) *Agent {
 }
 
 func validateConfig(cfg agentConfig) error {
+	// Deferred error from provider shorthand (e.g. WithGemini with bad key).
+	if cfg.initErr != nil {
+		return fmt.Errorf("chainforge: %w", cfg.initErr)
+	}
 	if cfg.provider == nil {
 		return core.ErrNoProvider
 	}
@@ -53,6 +57,9 @@ func validateConfig(cfg agentConfig) error {
 	}
 	if cfg.maxIterations <= 0 {
 		return fmt.Errorf("chainforge: maxIterations must be > 0")
+	}
+	if cfg.historySummarizer != nil && cfg.maxHistory <= 0 {
+		return fmt.Errorf("chainforge: WithHistorySummarizer requires WithMaxHistory to be set to a positive value")
 	}
 	return nil
 }

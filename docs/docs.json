@@ -46,7 +46,8 @@
               "guides/memory",
               "guides/vector-memory",
               "guides/orchestration",
-              "guides/structured-output"
+              "guides/structured-output",
+              "guides/testing"
             ]
           },
           {

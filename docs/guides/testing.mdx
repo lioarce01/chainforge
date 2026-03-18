@@ -1,0 +1,145 @@
+---
+title: Testing
+description: Unit-test your agents, tools, and pipelines with testutil helpers.
+---
+
+The `pkg/testutil` package provides a scriptable provider, a fake memory store, and assertion helpers so you can unit test any code built on top of chainforge — without spinning up a real LLM.
+
+```go
+import "github.com/lioarce01/chainforge/pkg/testutil"
+```
+
+## MockProvider
+
+Script deterministic LLM responses in your tests:
+
+```go
+p := testutil.NewMockProvider(
+    testutil.EndTurnResponse("Hello, how can I help?"),          // turn 1
+    testutil.ToolUseResponse(core.ToolCall{                      // turn 2 — calls a tool
+        Name:  "search",
+        Input: `{"query":"Go concurrency"}`,
+    }),
+    testutil.EndTurnResponse("Here is what I found: ..."),       // turn 3 — final answer
+)
+
+agent, _ := chainforge.NewAgent(
+    chainforge.WithProvider(p),
+    chainforge.WithModel("mock"),
+    chainforge.WithTools(mySearchTool),
+)
+
+result, err := agent.Run(ctx, "s1", "Tell me about Go concurrency")
+```
+
+Responses are returned in order. Once exhausted, the last response repeats — so a single `EndTurnResponse` covers any number of calls.
+
+### Response builders
+
+| Builder | Description |
+|---|---|
+| `EndTurnResponse(text)` | A text response that ends the agent loop (`stop_reason: end_turn`). |
+| `ToolUseResponse(calls...)` | A tool-call response (`stop_reason: tool_use`). |
+| `ErrorResponse(err)` | A provider error — the agent surfaces this as a `Run` error. |
+
+### Inspection
+
+```go
+// How many times was the provider called?
+p.CallCount()
+
+// What did the last request look like?
+req := p.LastRequest()
+fmt.Println(req.Messages)
+
+// Full call history
+for _, call := range p.Calls() {
+    fmt.Println(call.Request.Model)
+}
+
+// Reset for the next test case
+p.Reset()
+```
+
+## MapMemoryStore
+
+A simple in-memory store that records operations for inspection:
+
+```go
+mem := testutil.NewMapMemory()
+
+agent, _ := chainforge.NewAgent(
+    chainforge.WithProvider(p),
+    chainforge.WithModel("mock"),
+    chainforge.WithMemory(mem),
+)
+
+agent.Run(ctx, "session-1", "Hello")
+
+// Inspect what was stored
+testutil.AssertSessionContains(t, mem, "session-1", "Hello")
+testutil.AssertSessionLen(t, mem, "session-1", 2) // user + assistant
+
+fmt.Println(mem.AppendCount()) // total Append calls
+fmt.Println(mem.SessionIDs())  // all active session IDs
+```
+
+## Assertions
+
+Drop-in assertion helpers for `*testing.T` and `testing.TB`:
+
+```go
+// Verify the provider was called exactly twice
+testutil.AssertCallCount(t, p, 2)
+
+// Verify the last request contained a specific message
+testutil.AssertLastRequestContains(t, p, core.RoleUser, "Go concurrency")
+
+// Verify a session contains a specific string
+testutil.AssertSessionContains(t, mem, "session-1", "expected text")
+
+// Verify a session has an exact number of messages
+testutil.AssertSessionLen(t, mem, "session-1", 4)
+```
+
+## Example: testing a tool-calling agent
+
+```go
+func TestMyAgent_CallsSearchTool(t *testing.T) {
+    var searchCalled bool
+    searchTool, _ := tools.Func("search", "Search the web",
+        tools.NewSchema().AddString("query", "query", true).MustBuild(),
+        func(ctx context.Context, input string) (string, error) {
+            searchCalled = true
+            return "result", nil
+        },
+    )
+
+    p := testutil.NewMockProvider(
+        testutil.ToolUseResponse(core.ToolCall{Name: "search", Input: `{"query":"test"}`}),
+        testutil.EndTurnResponse("Done."),
+    )
+
+    agent, err := chainforge.NewAgent(
+        chainforge.WithProvider(p),
+        chainforge.WithModel("mock"),
+        chainforge.WithTools(searchTool),
+    )
+    if err != nil {
+        t.Fatal(err)
+    }
+
+    result, err := agent.Run(context.Background(), "s1", "Search for test")
+    if err != nil {
+        t.Fatal(err)
+    }
+
+    testutil.AssertCallCount(t, p, 2) // tool call + final answer
+    if !searchCalled {
+        t.Error("expected search tool to be called")
+    }
+    if result != "Done." {
+        t.Errorf("got %q, want %q", result, "Done.")
+    }
+}
+```

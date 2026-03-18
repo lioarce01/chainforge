@@ -3,6 +3,7 @@ package chainforge
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -37,6 +38,7 @@ type agentConfig struct {
 	traceAttrs        func(context.Context) []attribute.KeyValue // extra OTel span attrs; may be nil
 	outputSchema      json.RawMessage                            // if set, validate LLM output as JSON
 	historySummarizer *Agent                                     // if set, summarize old messages instead of dropping
+	initErr           error                                      // deferred error from provider shorthand construction
 }
 
 func defaultConfig() agentConfig {
@@ -159,12 +161,12 @@ func WithMaxHistory(n int) AgentOption {
 
 // WithGemini configures the agent to use a Google Gemini provider.
 // apiKey is your Gemini API key; model is the model name (e.g. "gemini-2.0-flash").
-// If provider creation fails, the error is silently swallowed and NewAgent will
-// return an error because provider will be nil.
+// If provider creation fails, the error is surfaced by NewAgent.
 func WithGemini(apiKey, model string) AgentOption {
 	return func(c *agentConfig) {
 		p, err := gemini.New(apiKey, model)
 		if err != nil {
+			c.initErr = fmt.Errorf("WithGemini: %w", err)
 			return
 		}
 		c.provider = p
