@@ -46,6 +46,7 @@ require (
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
+	github.com/pgvector/pgvector-go v0.3.0 // indirect
 	github.com/prometheus/client_golang v1.23.2 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
 	github.com/prometheus/common v0.66.1 // indirect
@@ -58,6 +59,7 @@ require (
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
+	github.com/x448/float16 v0.8.4 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	go.opencensus.io v0.24.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect

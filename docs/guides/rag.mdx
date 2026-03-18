@@ -11,9 +11,11 @@ RAG grounds LLM answers in real data by retrieving relevant document chunks and 
 |---|---|
 | `rag.Document` | A text chunk with ID, Content, Source, and Metadata |
 | `rag.Retriever` | Interface: `Retrieve(ctx, query, topK) ([]Document, error)` |
+| `rag.DocumentStorer` | Interface: `Store(ctx, sessionID, docs) error` |
 | `rag.Ingestor` | Splits documents and stores them via a `DocumentStorer` |
 | `rag.QdrantRetriever` | Retriever backed by Qdrant semantic search |
 | `rag.QdrantIngestor` | Storer that writes chunks into Qdrant |
+| `rag.PGVectorStore` | Retriever + storer backed by PostgreSQL + pgvector |
 | `rag.NewRetrieverTool` | Wraps a `Retriever` as a `core.Tool` for LLM-driven retrieval |
 
 ## Loading documents
@@ -116,6 +118,75 @@ agent, _ := chainforge.NewAgent(
 ```
 
 The LLM can call `retriever_tool` with `{"query": "..."}` to fetch context on-demand.
+
+## Ingesting into PostgreSQL + pgvector
+
+`PGVectorStore` implements both `rag.Retriever` and `rag.DocumentStorer`, so a single instance handles ingestion and retrieval. It automatically creates the `vector` extension and the chunk table on first use.
+
+```go
+import "github.com/lioarce01/chainforge/pkg/rag"
+
+embedder := embedders.NewOpenAIEmbedder(apiKey, "text-embedding-3-small")
+
+store, err := rag.NewPGVectorStore(
+    "postgres://user:pass@localhost:5432/mydb",
+    embedder,
+    // optional:
+    rag.PGVWithTable("kb_chunks"),   // default: "chainforge_rag_chunks"
+    rag.PGVWithSchema("public"),      // default: "public"
+    rag.PGVWithMaxConns(10),          // default: 10
+    rag.PGVWithHNSW(),                // recommended for >100k rows
+)
+defer store.Close()
+
+// Ingest
+ingestor := rag.NewIngestor(store)
+docs, _ := loader.LoadFile("handbook.md")
+ingestor.Ingest(ctx, "kb", docs, rag.WithChunkSize(512), rag.WithChunkOverlap(64))
+
+// Auto-retrieval
+agent, _ := chainforge.NewAgent(
+    chainforge.WithAnthropic(key, "claude-sonnet-4-6"),
+    chainforge.WithRetriever(store, rag.WithTopK(5)),
+)
+```
+
+### Session scoping
+
+`Store` and `RetrieveBySession` both accept a `sessionID`. Use different IDs to maintain isolated knowledge bases in the same table:
+
+```go
+// Ingest into separate namespaces
+ingestorA := rag.NewIngestor(store)
+ingestorA.Ingest(ctx, "product-docs", productDocs)
+ingestorA.Ingest(ctx, "support-kb",   supportDocs)
+
+// Retrieve only from "product-docs"
+docs, _ := store.RetrieveBySession(ctx, "product-docs", query, 5)
+
+// Or retrieve globally across all sessions
+docs, _ := store.Retrieve(ctx, query, 5)
+```
+
+### HNSW index
+
+For collections over 100k rows, enable the HNSW approximate nearest neighbor index. It trades a ~10–30s extra migration step for significantly faster ANN search:
+
+```go
+store, _ := rag.NewPGVectorStore(dsn, embedder, rag.PGVWithHNSW())
+```
+
+The index is created with `vector_cosine_ops`, matching the `<=>` cosine distance operator used in all queries.
+
+### Prerequisites
+
+- PostgreSQL 14+ with the [pgvector](https://github.com/pgvector/pgvector) extension installed
+- Environment: `PGVECTOR_DSN=postgres://user:pass@host:5432/db`
+
+```sql
+-- One-time DB setup (or let chainforge do it automatically on first use)
+CREATE EXTENSION IF NOT EXISTS vector;
+```
 
 ## Custom Retriever
 
