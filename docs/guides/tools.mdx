@@ -24,11 +24,38 @@ chainforge.WithTools(
 
 ## Custom tools
 
-Wrap any function as a tool with `tools.Func` — no interface boilerplate:
+### TypedFunc — one-line tool definition
+
+Use `tools.TypedFunc[TInput]` to define a tool from a typed struct. Schema generation, JSON marshalling, and unmarshalling are handled automatically — no boilerplate required.
 
 ```go
 import "github.com/lioarce01/chainforge/pkg/tools"
 
+type WeatherInput struct {
+    City  string `json:"city"  cf:"required,description=City name"`
+    Units string `json:"units" cf:"enum=celsius|fahrenheit"`
+}
+
+weatherTool, err := tools.TypedFunc[WeatherInput](
+    "get_weather",
+    "Get the current weather for a city",
+    func(ctx context.Context, in WeatherInput) (string, error) {
+        return fetchWeather(in.City, in.Units)
+    },
+)
+```
+
+Use `MustTypedFunc` in package-level declarations or test setup:
+
+```go
+var weatherTool = tools.MustTypedFunc[WeatherInput]("get_weather", "...", fn)
+```
+
+### Func — raw JSON handler
+
+For full control over input parsing, use `tools.Func` directly:
+
+```go
 schema := tools.NewSchema().
     Add("city", tools.Property{Type: tools.TypeString, Description: "City name"}, true).
     MustBuild()
@@ -43,8 +70,6 @@ weatherTool, _ := tools.Func(
         return fetchWeather(args.City)
     },
 )
-
-chainforge.WithTools(weatherTool)
 ```
 
 ## Schema shorthand methods

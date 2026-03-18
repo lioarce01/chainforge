@@ -93,6 +93,26 @@ model: claude-sonnet-4-6
 | `WithLogging(logger)` | — | Wraps the provider with slog middleware. Logs every Chat/ChatStream call with latency and token counts. Falls back to `slog.Default()` if logger is nil. |
 | `WithTracing()` | — | Wraps the provider with OpenTelemetry spans. Session ID is automatically added to every span. Uses the global tracer — call `otel.InitTracerProvider` first. No-op if the global tracer is uninitialised. |
 | `WithTraceAttributes(fn)` | — | Appends extra OTel span attributes to every Chat/ChatStream call. `fn` receives the call context so it can extract request-scoped values (user ID, tenant, etc.). Requires `WithTracing()`. |
+| `WithDebugHandler(fn)` | — | Fires `fn` synchronously at each step of the agent loop: before/after every LLM call and before/after every tool execution. Use `PrettyPrintDebugHandler(os.Stderr)` for instant local tracing. Intended for development — use `WithLogging`/`WithTracing` for production. |
+
+```go
+// Instant human-readable transcript to stderr
+agent, _ := chainforge.NewAgent(
+    chainforge.WithProvider(p),
+    chainforge.WithModel("claude-sonnet-4-6"),
+    chainforge.WithDebugHandler(chainforge.PrettyPrintDebugHandler(os.Stderr)),
+)
+```
+
+Output:
+```
+[iter 0] → LLM  (3 messages)
+[iter 0] ← LLM  stop=tool_use  ""
+[iter 0] ⚙  tool=search  input={"query":"Go concurrency"}
+[iter 0] ✓  tool=search  result=Go uses goroutines and channels…
+[iter 1] → LLM  (5 messages)
+[iter 1] ← LLM  stop=end_turn  "Go concurrency is based on goroutines…"
+```
 
 ### ProviderBuilder
 
@@ -168,6 +188,7 @@ chainforge.NewAgent(
 | `ErrInvalidOutput` | `WithStructuredOutput` is set and the final LLM response fails JSON/schema validation. |
 | provider init error | `WithGemini` (or other provider shortcuts) failed to create the provider — now surfaces the original error at `NewAgent` time instead of returning `ErrNoProvider`. |
 | misconfiguration | `WithHistorySummarizer` without `WithMaxHistory` returns an error at `NewAgent` time. |
+| tool name invalid | Tool with an empty name, non-alphanumeric/underscore/hyphen characters, or a duplicate name returns an error at `NewAgent` time. |
 
 ### Error constructors
 

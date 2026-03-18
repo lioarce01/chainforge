@@ -161,11 +161,13 @@ func (a *Agent) RunWithUsage(ctx context.Context, sessionID, userMessage string)
 			slog.Int("iteration", i+1),
 			slog.Int("messages", len(req.Messages)),
 		)
+		a.debug(ctx, DebugEvent{Kind: DebugLLMRequest, Iteration: i, Messages: req.Messages})
 
 		resp, err := a.cfg.provider.Chat(ctx, req)
 		if err != nil {
 			return "", core.Usage{}, fmt.Errorf("agent: provider error: %w", err)
 		}
+		a.debug(ctx, DebugEvent{Kind: DebugLLMResponse, Iteration: i, Response: &resp})
 
 		totalUsage.InputTokens += resp.Usage.InputTokens
 		totalUsage.OutputTokens += resp.Usage.OutputTokens
@@ -481,12 +483,21 @@ func (a *Agent) callTool(ctx context.Context, tc core.ToolCall) (string, error) 
 		slog.String("name", tc.Name),
 		slog.String("input", tc.Input),
 	)
+	a.debug(ctx, DebugEvent{Kind: DebugToolCall, ToolCall: &tc})
 
 	output, err := tool.Call(ctx, tc.Input)
+	a.debug(ctx, DebugEvent{Kind: DebugToolResult, ToolCall: &tc, ToolOutput: output, ToolError: err})
 	if err != nil {
 		return "", &core.ToolError{ToolName: tc.Name, Err: err}
 	}
 	return output, nil
+}
+
+// debug fires the debug handler if one is configured. Zero overhead when not set.
+func (a *Agent) debug(ctx context.Context, ev DebugEvent) {
+	if a.cfg.debugHandler != nil {
+		a.cfg.debugHandler(ctx, ev)
+	}
 }
 
 // loadHistory fetches history from memory (returns nil if no memory store).

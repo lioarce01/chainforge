@@ -61,11 +61,17 @@ func (m *MockProvider) ChatStream(ctx context.Context, req core.ChatRequest) (<-
 	if err != nil {
 		return nil, err
 	}
-	ch := make(chan core.StreamEvent, 2)
+	ch := make(chan core.StreamEvent, 2+len(resp.Message.ToolCalls))
 	go func() {
 		defer close(ch)
 		if resp.Message.Content != "" {
 			ch <- core.StreamEvent{Type: core.StreamEventText, TextDelta: resp.Message.Content}
+		}
+		for i := range resp.Message.ToolCalls {
+			ch <- core.StreamEvent{
+				Type:     core.StreamEventToolCall,
+				ToolCall: &resp.Message.ToolCalls[i],
+			}
 		}
 		ch <- core.StreamEvent{
 			Type:       core.StreamEventDone,

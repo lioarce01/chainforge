@@ -39,6 +39,7 @@ type agentConfig struct {
 	outputSchema      json.RawMessage                            // if set, validate LLM output as JSON
 	historySummarizer *Agent                                     // if set, summarize old messages instead of dropping
 	initErr           error                                      // deferred error from provider shorthand construction
+	debugHandler      DebugHandler                               // if set, called at each agent loop step
 }
 
 func defaultConfig() agentConfig {
@@ -210,6 +211,19 @@ func WithTraceAttributes(fn func(context.Context) []attribute.KeyValue) AgentOpt
 // LLM to respond with valid JSON matching the schema.
 func WithStructuredOutput(schema json.RawMessage) AgentOption {
 	return func(c *agentConfig) { c.outputSchema = schema }
+}
+
+// WithDebugHandler registers a callback invoked at each step of the agent loop:
+// before/after every LLM call, and before/after every tool execution.
+// The handler is called synchronously and must not block.
+// Use PrettyPrintDebugHandler(os.Stderr) for instant local tracing:
+//
+//	chainforge.WithDebugHandler(chainforge.PrettyPrintDebugHandler(os.Stderr))
+//
+// Intended for development and testing — not for production instrumentation.
+// For production observability use WithLogging or WithTracing instead.
+func WithDebugHandler(fn DebugHandler) AgentOption {
+	return func(c *agentConfig) { c.debugHandler = fn }
 }
 
 // WithHistorySummarizer sets an agent used to summarize old messages when the

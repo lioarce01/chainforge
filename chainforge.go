@@ -13,7 +13,9 @@
 package chainforge
 
 import (
+	"encoding/json"
 	"fmt"
+	"unicode"
 
 	"github.com/lioarce01/chainforge/pkg/core"
 )
@@ -61,5 +63,32 @@ func validateConfig(cfg agentConfig) error {
 	if cfg.historySummarizer != nil && cfg.maxHistory <= 0 {
 		return fmt.Errorf("chainforge: WithHistorySummarizer requires WithMaxHistory to be set to a positive value")
 	}
+	// Tool validation: names must be non-empty, valid, and unique; schemas must be valid JSON.
+	seen := make(map[string]bool, len(cfg.tools))
+	for _, t := range cfg.tools {
+		def := t.Definition()
+		if def.Name == "" {
+			return fmt.Errorf("chainforge: a registered tool has an empty name")
+		}
+		if !isValidToolName(def.Name) {
+			return fmt.Errorf("chainforge: tool %q has an invalid name (use letters, digits, underscore, or hyphen only)", def.Name)
+		}
+		if seen[def.Name] {
+			return fmt.Errorf("chainforge: duplicate tool name %q", def.Name)
+		}
+		seen[def.Name] = true
+		if len(def.InputSchema) > 0 && !json.Valid(def.InputSchema) {
+			return fmt.Errorf("chainforge: tool %q has an invalid JSON schema", def.Name)
+		}
+	}
 	return nil
+}
+
+func isValidToolName(name string) bool {
+	for _, c := range name {
+		if !unicode.IsLetter(c) && !unicode.IsDigit(c) && c != '_' && c != '-' {
+			return false
+		}
+	}
+	return true
 }

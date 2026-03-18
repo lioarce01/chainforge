@@ -102,6 +102,49 @@ testutil.AssertSessionContains(t, mem, "session-1", "expected text")
 testutil.AssertSessionLen(t, mem, "session-1", 4)
 ```
 
+## Debug handler
+
+During development, attach `PrettyPrintDebugHandler` to see a turn-by-turn transcript of the agent loop:
+
+```go
+agent, _ := chainforge.NewAgent(
+    chainforge.WithProvider(p),
+    chainforge.WithModel("claude-sonnet-4-6"),
+    chainforge.WithDebugHandler(chainforge.PrettyPrintDebugHandler(os.Stderr)),
+)
+```
+
+Output:
+```
+[iter 0] → LLM  (3 messages)
+[iter 0] ← LLM  stop=tool_use  ""
+[iter 0] ⚙  tool=search  input={"query":"test"}
+[iter 0] ✓  tool=search  result=result
+[iter 1] → LLM  (5 messages)
+[iter 1] ← LLM  stop=end_turn  "Done."
+```
+
+You can also write a custom handler for test assertions:
+
+```go
+var toolsCalled []string
+agent, _ := chainforge.NewAgent(
+    chainforge.WithProvider(p),
+    chainforge.WithModel("mock"),
+    chainforge.WithDebugHandler(func(ctx context.Context, ev chainforge.DebugEvent) {
+        if ev.Kind == chainforge.DebugToolCall {
+            toolsCalled = append(toolsCalled, ev.ToolCall.Name)
+        }
+    }),
+)
+
+agent.Run(ctx, "s1", "search for something")
+
+if len(toolsCalled) == 0 || toolsCalled[0] != "search" {
+    t.Errorf("expected search tool, got %v", toolsCalled)
+}
+```
+
 ## Example: testing a tool-calling agent
 
 ```go
