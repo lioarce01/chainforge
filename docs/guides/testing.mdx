@@ -145,6 +145,62 @@ if len(toolsCalled) == 0 || toolsCalled[0] != "search" {
 }
 ```
 
+## AgentTrace — rich run assertions
+
+`AgentTrace` records every LLM call and tool invocation during a run, making test assertions read like specifications.
+
+```go
+import "github.com/lioarce01/chainforge/pkg/testutil"
+
+func TestMyAgent(t *testing.T) {
+    p := testutil.NewMockProvider(
+        testutil.ToolUseResponse(core.ToolCall{Name: "search", Input: `{"query":"Go"}`}),
+        testutil.EndTurnResponse("Go is great."),
+    )
+
+    tr := &testutil.AgentTrace{}
+
+    agent, _ := chainforge.NewAgent(
+        chainforge.WithProvider(p),
+        chainforge.WithModel("mock"),
+        chainforge.WithTools(searchTool),
+        chainforge.WithDebugHandler(testutil.TraceHandler(tr)),
+    )
+
+    result, _ := agent.Run(context.Background(), "s1", "Tell me about Go")
+
+    tr.AssertNoError(t)
+    tr.AssertIterations(t, 2)          // tool call iteration + final answer
+    tr.AssertToolCalled(t, "search")   // verify the tool was used
+    tr.AssertFinalText(t, "Go is great.")
+}
+```
+
+`AgentTrace` assertion methods:
+
+| Method | Description |
+|---|---|
+| `AssertIterations(t, n)` | Fails if the agent did not run exactly `n` iterations. |
+| `AssertToolCalled(t, name)` | Fails if the named tool was not called. |
+| `AssertToolNotCalled(t, name)` | Fails if the named tool was called. |
+| `AssertFinalText(t, want)` | Fails if the final text is not `want`. |
+| `AssertNoError(t)` | Fails if the run returned an error. |
+
+For access to the raw data (messages, responses, tool outputs), inspect `tr.Iterations` directly.
+
+## RunStreamCollect — streaming in one line
+
+Use `RunStreamCollect` when you want streaming for display but still need the final result:
+
+```go
+text, usage, err := agent.RunStreamCollect(ctx, "session-1", "Hello",
+    func(delta string) { fmt.Print(delta) }) // called for each text chunk
+
+// onDelta is nil-safe — behaves like Run but also returns usage:
+text, usage, err := agent.RunStreamCollect(ctx, "session-1", "Hello", nil)
+fmt.Printf("tokens: %d in / %d out\n", usage.InputTokens, usage.OutputTokens)
+```
+
 ## Example: testing a tool-calling agent
 
 ```go

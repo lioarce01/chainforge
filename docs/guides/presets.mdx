@@ -1,0 +1,79 @@
+---
+title: Presets
+description: Named constructors for common agent configurations.
+---
+
+The `pkg/preset` package provides ready-made agent constructors for the most common patterns. They set sensible defaults and reduce boilerplate — without removing any flexibility.
+
+```go
+import "github.com/lioarce01/chainforge/pkg/preset"
+```
+
+## Chatbot
+
+A conversational agent with memory and a 1-iteration loop (no tool calling).
+
+```go
+agent, err := preset.Chatbot(provider, "claude-sonnet-4-6", preset.ChatbotConfig{
+    SystemPrompt: "You are a helpful assistant.",
+    MaxHistory:   20,
+})
+
+result, err := agent.Run(ctx, "session-1", "Hello!")
+```
+
+**Defaults set by `Chatbot`:**
+- `WithMemory(inmemory.New())` — in-memory store created automatically (override via `Memory` field)
+- `WithMaxIterations(1)` — single-turn response, no agentic loop
+
+**Override any default** using the extra options variadic:
+
+```go
+agent, err := preset.Chatbot(provider, "claude-sonnet-4-6",
+    preset.ChatbotConfig{SystemPrompt: "You are a helpful assistant."},
+    chainforge.WithRetry(3),
+    chainforge.WithRunTimeout(30*time.Second),
+)
+```
+
+## ToolAgent
+
+An agent with tools, automatic retry, and a multi-iteration loop.
+
+```go
+agent, err := preset.ToolAgent(provider, "claude-sonnet-4-6", preset.ToolAgentConfig{
+    SystemPrompt:  "You are a research assistant with access to the web.",
+    Tools:         []core.Tool{searchTool, calcTool},
+    MaxIterations: 10,
+    MaxRetries:    3,
+})
+
+result, err := agent.Run(ctx, "session-1", "What is the population of Tokyo?")
+```
+
+**Defaults set by `ToolAgent`:**
+- `WithMaxIterations(10)` when `MaxIterations` is 0
+- `WithRetry(3)` when `MaxRetries` is 0
+
+**With persistent memory:**
+
+```go
+store, _ := sqlite.New("./chat.db")
+
+agent, err := preset.ToolAgent(provider, "claude-sonnet-4-6", preset.ToolAgentConfig{
+    SystemPrompt: "You are a research assistant.",
+    Tools:        []core.Tool{searchTool},
+    Memory:       store,
+})
+```
+
+## When to use presets vs. raw `NewAgent`
+
+| Scenario | Recommendation |
+|---|---|
+| Quick chatbot or demo | `preset.Chatbot` |
+| Agent with tools | `preset.ToolAgent` |
+| Fine-grained control (custom retry ordering, MCP, OTel) | `chainforge.NewAgent` directly |
+| Multiple agents in a pipeline | Build each with `NewAgent`; presets are for standalone agents |
+
+Presets call `chainforge.NewAgent` internally — there is no runtime overhead. Extra options passed as the variadic override any preset-supplied option.

@@ -156,6 +156,23 @@ result, usage, err := agent.RunWithUsage(ctx, "session-1", "Hello")
 fmt.Printf("input=%d output=%d\n", usage.InputTokens, usage.OutputTokens)
 ```
 
+### RunStreamCollect
+
+A streaming one-liner that accumulates the full text and calls `onDelta` for each chunk. Useful when you want real-time display but also need the final string:
+
+```go
+text, usage, err := agent.RunStreamCollect(ctx, "session-1", "Hello",
+    func(delta string) { fmt.Print(delta) })
+```
+
+Pass `nil` for `onDelta` to get usage without real-time display:
+
+```go
+text, usage, err := agent.RunStreamCollect(ctx, "session-1", "Hello", nil)
+```
+
+### RunStream (raw)
+
 `RunStream` emits usage on the final `Done` event:
 
 ```go

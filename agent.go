@@ -361,6 +361,43 @@ func (a *Agent) RunStream(ctx context.Context, sessionID, userMessage string) <-
 	return ch
 }
 
+// RunStreamCollect runs the agent in streaming mode, calls onDelta for each
+// text chunk (useful for real-time display), and returns the full accumulated
+// text and total usage when the stream is done.
+//
+// onDelta may be nil — in that case RunStreamCollect behaves like Run but also
+// returns token usage.
+//
+//	text, usage, err := agent.RunStreamCollect(ctx, "session-1", "Hello",
+//	    func(delta string) { fmt.Print(delta) })
+func (a *Agent) RunStreamCollect(
+	ctx context.Context,
+	sessionID, userMessage string,
+	onDelta func(delta string),
+) (string, core.Usage, error) {
+	ch := a.RunStream(ctx, sessionID, userMessage)
+	var (
+		sb    strings.Builder
+		usage core.Usage
+	)
+	for ev := range ch {
+		switch ev.Type {
+		case core.StreamEventText:
+			sb.WriteString(ev.TextDelta)
+			if onDelta != nil {
+				onDelta(ev.TextDelta)
+			}
+		case core.StreamEventDone:
+			if ev.Usage != nil {
+				usage = *ev.Usage
+			}
+		case core.StreamEventError:
+			return "", core.Usage{}, ev.Error
+		}
+	}
+	return sb.String(), usage, nil
+}
+
 type toolResult struct {
 	index int
 	msg   core.Message
