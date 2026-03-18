@@ -21,8 +21,9 @@ type Agent struct {
 	toolMap    map[string]core.Tool
 	toolDefs   []core.ToolDefinition // cached; rebuilt after MCP connect
 	mcpClients []*mcppkg.Client
-	mcpOnce    sync.Once
-	mcpErr     error
+	mcpMu      sync.Mutex
+	mcpDone    bool  // true only after a successful connect
+	mcpErr     error // last connect error; cleared by ReconnectMCP
 }
 
 func newAgent(cfg agentConfig) *Agent {
@@ -112,10 +113,9 @@ func (a *Agent) RunWithUsage(ctx context.Context, sessionID, userMessage string)
 
 	start := time.Now()
 
-	// Connect MCP servers exactly once across all Run calls.
-	a.mcpOnce.Do(func() { a.mcpErr = a.connectMCP(ctx) })
-	if a.mcpErr != nil {
-		return "", core.Usage{}, fmt.Errorf("agent: MCP connect: %w", a.mcpErr)
+	// Connect MCP servers (retryable on failure via ReconnectMCP).
+	if err := a.ensureMCPConnected(ctx); err != nil {
+		return "", core.Usage{}, fmt.Errorf("agent: MCP connect: %w", err)
 	}
 
 	// Load history from memory
@@ -227,19 +227,29 @@ func (a *Agent) RunStream(ctx context.Context, sessionID, userMessage string) <-
 	go func() {
 		defer close(ch)
 
-		// Connect MCP servers exactly once across all RunStream calls.
-		a.mcpOnce.Do(func() { a.mcpErr = a.connectMCP(ctx) })
-		if a.mcpErr != nil {
-			ch <- core.StreamEvent{
-				Type:  core.StreamEventError,
-				Error: fmt.Errorf("agent: MCP connect: %w", a.mcpErr),
+		// send is a context-aware helper: returns false if ctx is done so the
+		// goroutine can exit cleanly instead of blocking forever on a full channel.
+		send := func(ev core.StreamEvent) bool {
+			select {
+			case ch <- ev:
+				return true
+			case <-ctx.Done():
+				return false
 			}
+		}
+
+		// Connect MCP servers (retryable on failure via ReconnectMCP).
+		if err := a.ensureMCPConnected(ctx); err != nil {
+			send(core.StreamEvent{
+				Type:  core.StreamEventError,
+				Error: fmt.Errorf("agent: MCP connect: %w", err),
+			})
 			return
 		}
 
 		history, err := a.loadHistory(ctx, sessionID)
 		if err != nil {
-			ch <- core.StreamEvent{Type: core.StreamEventError, Error: err}
+			send(core.StreamEvent{Type: core.StreamEventError, Error: err})
 			return
 		}
 
@@ -267,7 +277,7 @@ func (a *Agent) RunStream(ctx context.Context, sessionID, userMessage string) <-
 
 			stream, err := a.cfg.provider.ChatStream(ctx, req)
 			if err != nil {
-				ch <- core.StreamEvent{Type: core.StreamEventError, Error: err}
+				send(core.StreamEvent{Type: core.StreamEventError, Error: err})
 				return
 			}
 
@@ -282,7 +292,9 @@ func (a *Agent) RunStream(ctx context.Context, sessionID, userMessage string) <-
 				switch event.Type {
 				case core.StreamEventText:
 					sb.WriteString(event.TextDelta)
-					ch <- event
+					if !send(event) {
+						return
+					}
 				case core.StreamEventToolCall:
 					if event.ToolCall != nil {
 						toolCalls = append(toolCalls, *event.ToolCall)
@@ -293,7 +305,7 @@ func (a *Agent) RunStream(ctx context.Context, sessionID, userMessage string) <-
 						usage = *event.Usage
 					}
 				case core.StreamEventError:
-					ch <- event
+					send(event)
 					return
 				}
 			}
@@ -311,17 +323,17 @@ func (a *Agent) RunStream(ctx context.Context, sessionID, userMessage string) <-
 			}
 
 			if stopReason != core.StopReasonToolUse || len(toolCalls) == 0 {
-				ch <- core.StreamEvent{
+				send(core.StreamEvent{
 					Type:       core.StreamEventDone,
 					StopReason: stopReason,
 					Usage:      &totalUsage,
-				}
+				})
 				return
 			}
 
 			toolMsgs, err := a.dispatchTools(ctx, toolCalls)
 			if err != nil {
-				ch <- core.StreamEvent{Type: core.StreamEventError, Error: err}
+				send(core.StreamEvent{Type: core.StreamEventError, Error: err})
 				return
 			}
 			history = append(history, toolMsgs...)
@@ -330,7 +342,7 @@ func (a *Agent) RunStream(ctx context.Context, sessionID, userMessage string) <-
 			}
 		}
 
-		ch <- core.StreamEvent{Type: core.StreamEventError, Error: core.ErrMaxIterations}
+		send(core.StreamEvent{Type: core.StreamEventError, Error: core.ErrMaxIterations})
 	}()
 	return ch
 }
@@ -499,6 +511,32 @@ func parseToolInput[T any](input string) (T, error) {
 // Calling WarmMCP is optional — Run and RunStream also connect lazily — but
 // pre-connecting eliminates the latency spike on the first request.
 func (a *Agent) WarmMCP(ctx context.Context) error {
-	a.mcpOnce.Do(func() { a.mcpErr = a.connectMCP(ctx) })
+	return a.ensureMCPConnected(ctx)
+}
+
+// ensureMCPConnected connects MCP servers if not already successfully connected.
+// Safe for concurrent use; only the first caller runs connectMCP — unless
+// ReconnectMCP has been called to reset the state after a failure.
+func (a *Agent) ensureMCPConnected(ctx context.Context) error {
+	a.mcpMu.Lock()
+	defer a.mcpMu.Unlock()
+	if a.mcpDone {
+		return nil // already connected successfully
+	}
+	a.mcpErr = a.connectMCP(ctx)
+	if a.mcpErr == nil {
+		a.mcpDone = true
+	}
 	return a.mcpErr
+}
+
+// ReconnectMCP resets the connection state and re-attempts connecting all
+// configured MCP servers. Use this to recover from a transient network failure
+// without creating a new Agent.
+func (a *Agent) ReconnectMCP(ctx context.Context) error {
+	a.mcpMu.Lock()
+	a.mcpDone = false
+	a.mcpErr = nil
+	a.mcpMu.Unlock()
+	return a.ensureMCPConnected(ctx)
 }

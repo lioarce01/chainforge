@@ -35,6 +35,29 @@ agent.Run(ctx, "session-1", "What is my name?")
 
 Sessions are namespaced by `sessionID`. Different IDs are fully isolated.
 
+### Options
+
+The in-memory store accepts functional options to control session lifecycle:
+
+```go
+import (
+    "time"
+    "github.com/lioarce01/chainforge/pkg/memory/inmemory"
+)
+
+store := inmemory.New(
+    inmemory.WithTTL(30 * time.Minute),   // expire idle sessions after 30 min
+    inmemory.WithMaxMessages(100),         // keep only the last 100 messages per session
+)
+```
+
+| Option | Description | Default |
+|---|---|---|
+| `WithTTL(d)` | Sessions that have not received a new message within `d` are cleared on the next `Get`. TTL resets on every `Append` (sliding window). | No expiry |
+| `WithMaxMessages(n)` | After each `Append`, if the session exceeds `n` messages the oldest are dropped. | Unlimited |
+
+Both options can be combined. Use `WithTTL` to prevent unbounded memory growth in long-running processes, and `WithMaxMessages` to cap per-session context size.
+
 ## SQLite store
 
 Zero infrastructure required — pure Go, no cgo.

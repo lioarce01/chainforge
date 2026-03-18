@@ -82,14 +82,31 @@ agent, err := chainforge.NewAgent(...)
 defer agent.Close()
 ```
 
-## Error handling
+## Error handling & reconnection
 
 | Scenario | Behavior |
 |---|---|
-| Server fails to connect | Error cached; all subsequent `Run` calls return the same error |
+| Server fails to connect | Error is held; retry by calling `ReconnectMCP` |
 | Tool call returns an error | Non-fatal — error string fed to LLM as tool result |
 | Context cancelled during connect | Propagates immediately |
-| Multiple concurrent `Run` calls | `sync.Once` guarantees connect runs exactly once |
+| Multiple concurrent `Run` calls | Internal mutex guarantees connect runs exactly once |
+
+If a transient network failure prevents the initial connection, use `ReconnectMCP` to reset the connection state and retry — without needing to create a new `Agent`:
+
+```go
+// Initial run fails due to a network blip.
+result, err := agent.Run(ctx, "session-1", "hello")
+if err != nil {
+    // Re-attempt the connection explicitly.
+    if reconnErr := agent.ReconnectMCP(ctx); reconnErr != nil {
+        log.Fatal("reconnect failed:", reconnErr)
+    }
+    // Retry the run — MCP servers are now connected.
+    result, err = agent.Run(ctx, "session-1", "hello")
+}
+```
+
+`ReconnectMCP` is safe to call from multiple goroutines. Once it returns nil all subsequent `Run` and `RunStream` calls proceed without re-connecting.
 
 ## Full example
 
