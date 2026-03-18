@@ -28,6 +28,8 @@ type agentConfig struct {
 	providerWrappers []func(core.Provider) core.Provider
 	maxHistory       int           // 0 = unlimited
 	runTimeout       time.Duration // 0 = no timeout
+	streamBufSize    int           // RunStream channel buffer capacity (default: 16)
+	toolConcurrency  int           // 0 = unlimited concurrent tool goroutines
 }
 
 func defaultConfig() agentConfig {
@@ -37,6 +39,7 @@ func defaultConfig() agentConfig {
 		maxTokens:     4096,
 		temperature:   0.7,
 		logger:        slog.Default(),
+		streamBufSize: 16,
 	}
 }
 
@@ -172,4 +175,19 @@ func WithTracing() AgentOption {
 			return cfotel.NewTracedProvider(p, cfotel.Tracer())
 		})
 	}
+}
+
+// WithStreamBufferSize sets the RunStream channel buffer capacity (default: 16).
+// Increase this for high-throughput streaming with long tool call chains to
+// reduce back-pressure on the background goroutine.
+func WithStreamBufferSize(n int) AgentOption {
+	return func(c *agentConfig) { c.streamBufSize = n }
+}
+
+// WithToolConcurrency limits how many tool goroutines may run simultaneously
+// during a single dispatchTools call. 0 (default) means unlimited — the
+// current behaviour. Set to a positive value to cap goroutine burst when the
+// LLM returns many tool calls at once.
+func WithToolConcurrency(n int) AgentOption {
+	return func(c *agentConfig) { c.toolConcurrency = n }
 }

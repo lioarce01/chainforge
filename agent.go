@@ -223,7 +223,7 @@ func (a *Agent) RunWithUsage(ctx context.Context, sessionID, userMessage string)
 // The final text is accumulated; tool calls are still dispatched synchronously.
 // The returned channel is closed when done or on error.
 func (a *Agent) RunStream(ctx context.Context, sessionID, userMessage string) <-chan core.StreamEvent {
-	ch := make(chan core.StreamEvent, 16)
+	ch := make(chan core.StreamEvent, a.cfg.streamBufSize)
 	go func() {
 		defer close(ch)
 
@@ -385,10 +385,32 @@ func (a *Agent) dispatchTools(ctx context.Context, toolCalls []core.ToolCall) ([
 	results := make(chan toolResult, len(toolCalls))
 	var wg sync.WaitGroup
 
+	// Optional semaphore to cap concurrent goroutines (WithToolConcurrency).
+	var sem chan struct{}
+	if a.cfg.toolConcurrency > 0 {
+		sem = make(chan struct{}, a.cfg.toolConcurrency)
+	}
+
 	for i, tc := range toolCalls {
 		wg.Add(1)
 		go func(idx int, call core.ToolCall) {
 			defer wg.Done()
+
+			// Acquire semaphore slot if concurrency is bounded.
+			if sem != nil {
+				select {
+				case sem <- struct{}{}:
+					defer func() { <-sem }()
+				case <-ctx.Done():
+					results <- toolResult{index: idx, msg: core.Message{
+						Role:       core.RoleTool,
+						Content:    fmt.Sprintf("error: %v", ctx.Err()),
+						ToolCallID: call.ID,
+						Name:       call.Name,
+					}}
+					return
+				}
+			}
 
 			toolCtx, cancel := context.WithTimeout(ctx, a.cfg.toolTimeout)
 			defer cancel()

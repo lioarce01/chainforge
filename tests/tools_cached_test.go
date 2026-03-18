@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/lioarce01/chainforge/pkg/tools"
 )
@@ -121,5 +122,61 @@ func TestCachedTool_DefinitionDelegates(t *testing.T) {
 	}
 	if def.Description != "my description" {
 		t.Errorf("expected Description=%q, got %q", "my description", def.Description)
+	}
+}
+
+// --- TTL tests ---
+
+func TestCachedToolTTLExpiry(t *testing.T) {
+	var callCount atomic.Int32
+	inner := tools.MustFunc("test", "test", nil, func(ctx context.Context, input string) (string, error) {
+		callCount.Add(1)
+		return "result", nil
+	})
+	cached := tools.NewCachedToolWithTTL(inner, 50*time.Millisecond)
+
+	cached.Call(context.Background(), `{}`)
+	if n := callCount.Load(); n != 1 {
+		t.Fatalf("expected 1 call, got %d", n)
+	}
+
+	time.Sleep(80 * time.Millisecond) // wait for TTL expiry
+
+	cached.Call(context.Background(), `{}`)
+	if n := callCount.Load(); n != 2 {
+		t.Errorf("expected 2 calls after expiry, got %d", n)
+	}
+}
+
+func TestCachedToolTTLNotExpired(t *testing.T) {
+	var callCount atomic.Int32
+	inner := tools.MustFunc("test", "test", nil, func(ctx context.Context, input string) (string, error) {
+		callCount.Add(1)
+		return "result", nil
+	})
+	cached := tools.NewCachedToolWithTTL(inner, 200*time.Millisecond)
+
+	cached.Call(context.Background(), `{}`)
+	cached.Call(context.Background(), `{}`) // should hit cache
+
+	if n := callCount.Load(); n != 1 {
+		t.Errorf("expected 1 call (cache hit), got %d", n)
+	}
+}
+
+func TestCachedToolNoTTL(t *testing.T) {
+	var callCount atomic.Int32
+	inner := tools.MustFunc("test", "test", nil, func(ctx context.Context, input string) (string, error) {
+		callCount.Add(1)
+		return "result", nil
+	})
+	cached := tools.NewCachedTool(inner) // no TTL
+
+	cached.Call(context.Background(), `{}`)
+	time.Sleep(10 * time.Millisecond)
+	cached.Call(context.Background(), `{}`)
+
+	if n := callCount.Load(); n != 1 {
+		t.Errorf("expected 1 call (no TTL = permanent cache), got %d", n)
 	}
 }

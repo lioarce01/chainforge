@@ -65,6 +65,8 @@ model: claude-sonnet-4-6
 | `WithTemperature(f)` | `0.7` | Sampling temperature. |
 | `WithMaxHistory(n)` | `0` (unlimited) | Caps the number of history messages loaded from memory per `Run` call to the most recent `n`. Prevents context window overflow on long sessions. Has no effect when no memory store is attached. |
 | `WithRetry(n)` | — | Wraps the provider with automatic retry on transient errors. `n` is the total number of attempts (1 = no retry, 3 = 2 retries). Uses exponential backoff: 200 ms → 400 ms → 800 ms … capped at 10 s. Context cancellation and deadline errors are never retried. |
+| `WithStreamBufferSize(n)` | `16` | Sets the `RunStream` channel buffer capacity. Increase for high-throughput streaming with long tool chains to reduce back-pressure. |
+| `WithToolConcurrency(n)` | `0` (unlimited) | Caps the number of tool goroutines that run simultaneously during one `dispatchTools` call. Useful when tools make external API calls and you want to avoid bursting 50+ concurrent requests. `0` restores the unlimited default. |
 
 ## Prompt & Tools
 

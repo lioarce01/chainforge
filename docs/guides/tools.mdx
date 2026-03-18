@@ -159,6 +159,19 @@ cached.InvalidateAll()  // force re-execution on next call
 
 `CachedTool` delegates `Definition()` to the wrapped tool, so the LLM sees the same schema.
 
+### TTL-based expiry
+
+Use `NewCachedToolWithTTL` to automatically expire cache entries after a duration:
+
+```go
+import "time"
+
+// Re-execute if the cached result is older than 5 minutes.
+cached := tools.NewCachedToolWithTTL(expensiveTool, 5*time.Minute)
+```
+
+A zero TTL behaves identically to `NewCachedTool` — entries never expire. Cache expiry uses a sliding window: the timestamp is recorded on first call; the next call after TTL elapses re-invokes the inner tool and refreshes the entry.
+
 ## Tool errors
 
 Tool execution errors are **non-fatal**. The error string is returned to the LLM as the tool result so the model can observe and handle it — the agent loop continues.
