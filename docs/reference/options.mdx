@@ -75,6 +75,7 @@ model: claude-sonnet-4-6
 | `WithSystemPrompt(s)` | System message prepended to every conversation. |
 | `WithTools(tools...)` | Register one or more tools. Can be called multiple times. |
 | `WithMemory(m)` | Attach a memory store for cross-run history persistence. Built-in stores: `inmemory`, `sqlite`, `postgres`, `redis`, `qdrant`. See the [Memory guide](/guides/memory). |
+| `WithStructuredOutput(schema)` | Validate every final LLM response against a JSON schema (`json.RawMessage`). Returns `ErrInvalidOutput` if the response is not valid JSON or its top-level type doesn't match. Also injects a system prompt hint. See the [Structured Output guide](/guides/structured-output). |
 
 ## MCP
 
@@ -89,7 +90,8 @@ model: claude-sonnet-4-6
 |---|---|---|
 | `WithLogger(l)` | `slog.Default()` | Structured `slog.Logger` for the agent loop. |
 | `WithLogging(logger)` | — | Wraps the provider with slog middleware. Logs every Chat/ChatStream call with latency and token counts. Falls back to `slog.Default()` if logger is nil. |
-| `WithTracing()` | — | Wraps the provider with OpenTelemetry spans. Uses the global tracer — call `otel.InitTracerProvider` first. No-op if the global tracer is uninitialised. |
+| `WithTracing()` | — | Wraps the provider with OpenTelemetry spans. Session ID is automatically added to every span. Uses the global tracer — call `otel.InitTracerProvider` first. No-op if the global tracer is uninitialised. |
+| `WithTraceAttributes(fn)` | — | Appends extra OTel span attributes to every Chat/ChatStream call. `fn` receives the call context so it can extract request-scoped values (user ID, tenant, etc.). Requires `WithTracing()`. |
 
 ### ProviderBuilder
 
@@ -162,6 +164,7 @@ chainforge.NewAgent(
 | `ErrToolNotFound` | LLM called a tool name that isn't registered. Non-fatal — returned as tool result. |
 | `ErrNoProvider` | `NewAgent` called without `WithProvider`. |
 | `ErrNoModel` | `NewAgent` called without `WithModel`. |
+| `ErrInvalidOutput` | `WithStructuredOutput` is set and the final LLM response fails JSON/schema validation. |
 
 ### Error constructors
 
